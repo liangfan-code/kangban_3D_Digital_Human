@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # pytest 专用独立测试库；未配置时测试套件在收集阶段报错并提示创建
     database_url_test: str | None = None
     redis_url: str = "redis://127.0.0.1:6379/0"
+    # Day4.4 会话状态（Redis 为主，进程内降级）；关掉后不尝试连接 Redis
+    session_state_enabled: bool = True
+    session_state_ttl_seconds: int = 86400
+    # 早期摘要上限字数与单次合并的旧消息条数
+    session_summary_max_chars: int = 150
+    session_summary_batch: int = 20
     sql_echo: bool = False
 
     # ---- System 2 大模型（后续 Optional）----
@@ -36,6 +42,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_reasoning_effort: str | None = None
     llm_timeout_seconds: int = 30
     llm_max_retries: int = 1
 

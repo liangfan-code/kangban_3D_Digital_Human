@@ -37,4 +37,7 @@ htmlcov/
 /models/
 /funasr-runtime-resources/
 
+# ---- Day4.4：本地 Redis 持久化数据（不入库）----
+/redis-data/
+
 

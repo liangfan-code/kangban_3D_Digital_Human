@@ -51,7 +51,9 @@ from app.integrations.sherpa_voiceprint import SherpaVoiceprintProvider
 from app.models import Elder, Voiceprint
 from app.models.enums import DeviceStatus, ElderStatus, IdentitySource, VoiceprintStatus
 from app.services import actions as action_service
-from app.services import conversation_store
+from app.services import context_summary, conversation_store
+from app.services.session_state import get_session_store
+from app.services.slot_extractor import extract_slots
 
 logger = get_logger(__name__)
 
@@ -527,6 +529,8 @@ class VoiceSession:
         self.verified_elder_id: UUID | None = None
         self.verify_failures = 0
         self.closed = False
+        # 早期摘要后台任务：同一会话同时只允许一个，关闭时取消
+        self._summary_task: asyncio.Task | None = None
 
     # ---- 音频入口（realtime 推入，16k mono int16 PCM 60ms 帧）----
 
@@ -830,7 +834,11 @@ class VoiceSession:
 
     async def _reply_via_llm(self, final_text: str, identity: IdentitySource) -> str:
         thread_id, history = await self._load_context(identity)
-        messages: list[dict[str, str]] = [{"role": "system", "content": _build_system_prompt()}]
+        context_text = await self._prepare_state(thread_id, final_text)
+        system_content = _build_system_prompt()
+        if context_text:
+            system_content = system_content + "\n\n" + context_text
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
         messages += [{"role": m.role, "content": m.content} for m in history]
         messages.append({"role": "user", "content": final_text})
 
@@ -856,6 +864,7 @@ class VoiceSession:
 
     async def _reply_via_template(self, final_text: str, identity: IdentitySource) -> str:
         thread_id, _ = await self._load_context(identity)
+        await self._prepare_state(thread_id, final_text)
         marked = action_service.apply_reply_rules(template_reply(final_text))
         reply = await self._emit_sentence(marked)
         await self._save_turn(thread_id, final_text, reply)
@@ -902,6 +911,48 @@ class VoiceSession:
                 await db.commit()
         except Exception:  # noqa: BLE001 —— 落库失败不影响通话
             logger.exception("conversation turn persist failed")
+            return
+        self._schedule_summary(thread_id)
+
+    async def _prepare_state(self, thread_id: UUID | None, final_text: str) -> str | None:
+        """抽槽 + 轮次累加，返回注入 system prompt 的动态上下文。
+
+        槽位只写会话状态，不执行任何动作，也不触碰 ``verified_elder_id``。
+        """
+        if thread_id is None:
+            return None
+        try:
+            store = get_session_store()
+            async with store.mutate(str(thread_id)) as state:
+                state.slots = extract_slots(final_text, state.slots)
+                state.turn_count += 1
+            return context_summary.build_context_message(state)
+        except Exception:  # noqa: BLE001 —— 状态缺失不阻断通话
+            logger.exception("session state prepare failed")
+            return None
+
+    def _schedule_summary(self, thread_id: UUID) -> None:
+        """把早期摘要放到后台任务，绑定当前 uvicorn 事件循环（禁止新建 loop）。"""
+        if self._db_factory is None:
+            return
+        if self._summary_task is not None and not self._summary_task.done():
+            return  # 同一会话同时只跑一个摘要任务，避免并发覆盖
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # 同步测试或无运行循环：跳过
+        self._summary_task = loop.create_task(self._refresh_summary(thread_id))
+
+    async def _refresh_summary(self, thread_id: UUID) -> None:
+        if self._db_factory is None:
+            return
+        try:
+            async with self._db_factory() as db:
+                state = await get_session_store().load(str(thread_id))
+                await context_summary.refresh_summary(db, thread_id, state)
+                await db.commit()
+        except Exception:  # noqa: BLE001 —— 摘要失败保留旧内容，下一轮重试
+            logger.exception("summary refresh failed")
 
     async def _synthesize_and_send(self, text: str) -> None:
         tts = get_tts_provider()
@@ -947,6 +998,8 @@ class VoiceSession:
 
     def close(self) -> None:
         self.closed = True
+        if self._summary_task is not None and not self._summary_task.done():
+            self._summary_task.cancel()
 
 
 class VoiceSessionManager:

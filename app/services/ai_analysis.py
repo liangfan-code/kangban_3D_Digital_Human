@@ -118,6 +118,8 @@ async def call_llm(payload: dict) -> tuple[str, str]:
         ],
         "stream": False,
     }
+    if s.llm_reasoning_effort:
+        body["reasoning_effort"] = s.llm_reasoning_effort
     url = s.llm_base_url.rstrip("/") + "/chat/completions"
     started = time.monotonic()
     try:

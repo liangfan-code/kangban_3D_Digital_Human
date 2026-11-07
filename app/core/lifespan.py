@@ -14,8 +14,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger = get_logger(__name__)
     logger.info("应用启动", extra={"event": "startup"})
     yield
-    # 关闭时清理数据库引擎连接池
+    # 关闭时清理数据库引擎连接池与会话状态缓存连接
     from app.db.session import dispose_engine
+    from app.services.session_state import close_session_store
 
     await dispose_engine()
-    logger.info("应用关闭，引擎已释放", extra={"event": "shutdown"})
+    await close_session_store()
+    logger.info("应用关闭，引擎与会话状态已释放", extra={"event": "shutdown"})

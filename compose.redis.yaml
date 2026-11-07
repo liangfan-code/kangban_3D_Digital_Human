@@ -1,0 +1,31 @@
+# 会话状态 Redis（Day4.4：Redis 会话状态 + 早期摘要游标 + 结构化槽位）
+# 应用侧未启动本容器时会自动降级为进程内字典，不影响通话。
+#
+# 启动：docker compose -f compose.redis.yaml up -d
+# 停止：docker compose -f compose.redis.yaml down
+# 验证：docker exec kangban-redis redis-cli ping   # 期望 PONG
+#       docker exec kangban-redis redis-cli keys 'kangban:session:*'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: kangban-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # AOF 持久化：进程重启后仍能保留 24h 内的会话状态
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"

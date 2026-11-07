@@ -29,6 +29,57 @@ def is_configured() -> bool:
     return bool(s.llm_api_key and s.llm_base_url and s.llm_model)
 
 
+async def complete_chat(
+    messages: list[dict[str, str]],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """非流式调用 chat/completions，返回完整正文（用于早期摘要等后台任务）。
+
+    与流式版本共用配置与鉴权头；失败统一抛 LlmUnavailable，由调用方软降级。
+    """
+    s = get_settings()
+    if not is_configured():
+        raise LlmUnavailable("LLM 未配置（llm_api_key/llm_base_url/llm_model 缺失）")
+    url = s.llm_base_url.rstrip("/") + "/chat/completions"
+    body: dict = {"model": s.llm_model, "messages": messages, "stream": False}
+    if s.llm_reasoning_effort:
+        body["reasoning_effort"] = s.llm_reasoning_effort
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=s.llm_timeout_seconds, transport=transport) as client:
+            resp = await client.post(
+                url, json=body, headers={"Authorization": f"Bearer {s.llm_api_key}"}
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "llm complete failed",
+            extra={
+                "event": "llm_complete_failed",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise LlmUnavailable(f"LLM 调用失败：{type(exc).__name__}") from exc
+    if resp.status_code != 200:
+        # 不读 body 细节，只记状态码（避免密钥/报文入日志）
+        raise LlmUnavailable(f"LLM HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise LlmUnavailable("LLM 响应不是合法 JSON") from exc
+    choices = payload.get("choices") or []
+    if not choices:
+        raise LlmUnavailable("LLM 响应缺少 choices")
+    content = (choices[0].get("message") or {}).get("content")
+    if not content:
+        raise LlmUnavailable("LLM 空回复")
+    return str(content)
+
+
 async def stream_chat(
     messages: list[dict[str, str]],
     *,
@@ -43,6 +94,8 @@ async def stream_chat(
         raise LlmUnavailable("LLM 未配置（llm_api_key/llm_base_url/llm_model 缺失）")
     url = s.llm_base_url.rstrip("/") + "/chat/completions"
     body = {"model": s.llm_model, "messages": messages, "stream": True}
+    if s.llm_reasoning_effort:
+        body["reasoning_effort"] = s.llm_reasoning_effort
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=s.llm_timeout_seconds, transport=transport) as client:
