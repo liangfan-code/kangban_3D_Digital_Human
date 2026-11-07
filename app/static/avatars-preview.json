@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "$comment": "模型挑选画廊专用清单（正式注册表 avatars.json 的超集预览，全部全身取景）；正式接入以 avatars.json 为准",
+  "default_avatar_id": "fischl",
+  "avatars": [
+    {
+      "id": "yoimiya", "name": "宵宫（原神）★正式", "description": "5.7 MB · 当前正式形象",
+      "model_url": "/vrm/models/Yoimiya.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "firefly", "name": "流萤（星穹铁道）★正式", "description": "13.9 MB · 当前正式形象",
+      "model_url": "/vrm/models/Firefly.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "neuvillette", "name": "那维莱特（原神）★正式", "description": "6.3 MB · 当前正式形象",
+      "model_url": "/vrm/models/Neuvillette.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "danheng", "name": "丹恒（星穹铁道）★正式", "description": "7.8 MB · 当前正式形象",
+      "model_url": "/vrm/models/Danheng.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "amazonas", "name": "亚马逊★正式", "description": "2.7 MB · 用户自选正式形象",
+      "model_url": "/vrm/models/Amazonas.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "lilshark", "name": "小鲨鱼★正式", "description": "6.8 MB · 用户自选正式形象（Q版）",
+      "model_url": "/vrm/models/LilShark.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "ajomajo", "name": "阿乔魔女★正式", "description": "2.1 MB · 用户自选正式形象（Q版）",
+      "model_url": "/vrm/models/AjoMajo.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "evelyn", "name": "Evelyn（绝区零）", "description": "34 MB，加载较慢",
+      "model_url": "/vrm/preview/Evelyn.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "fischl", "name": "菲谢尔（原神）", "description": "7.8 MB",
+      "model_url": "/vrm/preview/Fischl.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "jingyuan", "name": "景元（星穹铁道）", "description": "13.1 MB",
+      "model_url": "/vrm/preview/Jingyuan.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "jizi", "name": "姬子（星穹铁道）", "description": "11.1 MB",
+      "model_url": "/vrm/preview/Jizi.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "linghua", "name": "玲花（星穹铁道）", "description": "10.2 MB",
+      "model_url": "/vrm/preview/Linghua.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "lisa", "name": "丽莎（原神）", "description": "15.7 MB",
+      "model_url": "/vrm/preview/Lisa.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "ningguang", "name": "凝光（原神）", "description": "10.5 MB",
+      "model_url": "/vrm/preview/Ningguang.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "shenhe", "name": "申鹤（原神）", "description": "12.2 MB",
+      "model_url": "/vrm/preview/Shenhe.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "sparkle", "name": "花火（星穹铁道）", "description": "11.7 MB",
+      "model_url": "/vrm/preview/Sparkle.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    },
+    {
+      "id": "yinlin", "name": "吟霖（鸣潮）", "description": "40 MB，加载较慢",
+      "model_url": "/vrm/preview/Yinlin.vrm", "scale": 1.0, "rotation_y": 0,
+      "camera": { "fov": 32, "height_ratio": 0.5, "distance_ratio": 2.2, "look_at_ratio": 0.5 },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {}, "base_clips": {}
+    }
+  ]
+}

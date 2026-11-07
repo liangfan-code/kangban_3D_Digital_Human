@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>康伴 · 3D 模型挑选预览</title>
+  <style>
+    :root {
+      --primary: #236455; --primary-light: #2d7a66; --accent: #6db79a;
+      --bg: #eef4ef; --card: #ffffff; --text: #193a36;
+      --text-secondary: #607971; --border: #dce5dd; --radius: 18px;
+      --shadow: 0 8px 30px rgba(35, 100, 85, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: radial-gradient(circle at 20% 0%, #f7fbf8, var(--bg) 60%);
+      color: var(--text); min-height: 100vh; padding: 24px;
+    }
+    .wrap { max-width: 1060px; margin: 0 auto; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .logo {
+      width: 44px; height: 44px; border-radius: 14px; color: #fff;
+      background: linear-gradient(135deg, var(--primary), var(--primary-light));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 20px;
+    }
+    h1 { font-size: 20px; }
+    .sub { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tabs button {
+      font: inherit; font-size: 14px; padding: 8px 18px; border-radius: 999px;
+      border: 1px solid var(--border); background: #fff; cursor: pointer;
+    }
+    .tabs button.active {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #fff; border-color: transparent;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .stage {
+      position: relative; height: min(64vh, 580px);
+      background: linear-gradient(165deg, #e6f1ea, #f9fcfa 55%, #e7f2ec);
+      touch-action: none; user-select: none;
+    }
+    .stage canvas { display: block; width: 100%; height: 100%; }
+    .stage-meta {
+      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+      font-size: 12px; color: var(--text-secondary); border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.7);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .panel { padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .panel h2 { width: 100%; font-size: 13px; letter-spacing: 0.08em; color: var(--text-secondary); }
+    .panel h2 + .panel h2 { margin-top: 6px; }
+    button.pick {
+      font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 999px;
+      border: 1px solid var(--border); background: #f7faf8; cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    button.pick:hover { border-color: var(--accent); color: var(--primary); }
+    button.pick.active {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #fff; border-color: transparent;
+    }
+    button.pick:disabled { opacity: 0.55; cursor: wait; }
+    button.pick.small { font-size: 12px; padding: 6px 11px; }
+    .note { font-size: 12px; color: var(--text-secondary); margin-top: 10px; line-height: 1.7; width: 100%; }
+    .hidden { display: none; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.min.js",
+      "three/addons/": "/vendor/three/addons/",
+      "@pixiv/three-vrm": "/vendor/three-vrm/three-vrm.module.min.js",
+      "@pixiv/three-vrm-animation": "/vendor/three-vrm-animation/three-vrm-animation.module.min.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">伴</div>
+      <div>
+        <h1>3D 模型挑选预览</h1>
+        <div class="sub">正式形象 + 老师候选资源 · 拖拽旋转 / 滚轮缩放 / 动作试播</div>
+      </div>
+    </header>
+
+    <div class="tabs">
+      <button id="tabChar" class="active">人物模型（17 个）</button>
+      <button id="tabStage">舞台场景（3 个候选）</button>
+    </div>
+
+    <section class="card" id="charCard">
+      <div class="stage" id="charStage"></div>
+      <div class="stage-meta">
+        <span class="dot"></span>
+        <span id="charStatus">初始化…</span>
+      </div>
+      <div class="panel">
+        <h2>切换形象（★正式 = 已在正式注册表；大文件首次加载较慢）</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px" id="charBtns"></div>
+        <h2 style="margin-top:10px">动作试播（当前形象支持的通用动作）</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px" id="charActions"></div>
+        <p class="note" id="charNote">拖拽画布旋转视角，滚轮缩放，勾选自动旋转环视。加载完成后再试动作。</p>
+      </div>
+    </section>
+
+    <section class="card hidden" id="stageCard">
+      <div class="stage" id="glStage"></div>
+      <div class="stage-meta">
+        <span class="dot"></span>
+        <span id="glStatus">待加载</span>
+      </div>
+      <div class="panel">
+        <h2>舞台场景（来自 vrm-playground/assets/stage）</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px" id="stageBtns"></div>
+        <p class="note">舞台为 glb 场景模型，接入数字人后作为背景层渲染，人物立于舞台中央。</p>
+      </div>
+    </section>
+  </div>
+
+  <script type="module">
+    import { KangbanAvatar } from '/avatar/engine.js';
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    // ==================== 人物模型（复用正式引擎 + 画廊专用注册表） ====================
+    const charHost = document.getElementById('charStage');
+    const avatar = new KangbanAvatar({
+      host: charHost,
+      avatarsUrl: '/avatars-preview.json',
+      onStatus(s) {
+        document.getElementById('charStatus').textContent = s.message || s.phase;
+        if (s.phase === 'ready') {
+          syncOrbitToModel();
+          buildActionButtons();
+        }
+      },
+    });
+    await avatar.init();
+
+    const charBtns = document.getElementById('charBtns');
+    for (const item of avatar.listAvatars()) {
+      const btn = document.createElement('button');
+      btn.className = 'pick';
+      btn.textContent = item.name;
+      btn.title = item.description || '';
+      btn.addEventListener('click', async () => {
+        charBtns.querySelectorAll('button').forEach((b) => (b.disabled = true));
+        document.getElementById('charNote').textContent = `正在加载 ${item.name}…`;
+        try {
+          const result = await avatar.setAvatar(item.id);
+          if (result.ok) {
+            document.getElementById('charNote').textContent =
+              `当前预览：${item.name}（加载 ${result.switch_ms}ms）`;
+            charBtns.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+          } else {
+            document.getElementById('charNote').textContent = `加载失败：${result.error}`;
+          }
+        } finally {
+          charBtns.querySelectorAll('button').forEach((b) => (b.disabled = false));
+        }
+      });
+      charBtns.appendChild(btn);
+    }
+    charBtns.querySelector('button').classList.add('active');
+    document.getElementById('charNote').textContent =
+      '拖拽画布旋转视角，滚轮缩放；点动作按钮试播（播完自动回待机）。';
+
+    function buildActionButtons() {
+      const row = document.getElementById('charActions');
+      row.innerHTML = '';
+      for (const [actionId, def] of avatar.actions) {
+        const btn = document.createElement('button');
+        btn.className = 'pick small';
+        btn.textContent = def.label || actionId;
+        btn.title = def.usage || actionId;
+        btn.addEventListener('click', () => avatar.playAction(actionId));
+        row.appendChild(btn);
+      }
+      const spinBtn = document.createElement('button');
+      spinBtn.className = 'pick small';
+      spinBtn.textContent = '自动旋转：关';
+      spinBtn.addEventListener('click', () => {
+        charAuto = !charAuto;
+        spinBtn.textContent = '自动旋转：' + (charAuto ? '开' : '关');
+      });
+      row.appendChild(spinBtn);
+    }
+
+    // ---------- 人物视角轨道控制（拖拽环绕 / 滚轮缩放 / 自动旋转） ----------
+    const orbit = { theta: 0, phi: 1.25, radius: 4, target: new THREE.Vector3(0, 0.9, 0) };
+    let charDragging = false, charLastX = 0, charLastY = 0, charAuto = false;
+
+    function syncOrbitToModel() {
+      if (!avatar.vrm) return;
+      const box = new THREE.Box3().setFromObject(avatar.vrm.scene);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+      orbit.target.copy(center);
+      orbit.radius = Math.max(size.y * 2.2, 2);
+      applyCharCamera();
+    }
+
+    function applyCharCamera() {
+      const { theta, phi, radius, target } = orbit;
+      avatar.camera.position.set(
+        target.x + radius * Math.sin(phi) * Math.sin(theta),
+        target.y + radius * Math.cos(phi),
+        target.z + radius * Math.cos(theta),
+      );
+      avatar.camera.lookAt(target);
+    }
+
+    charHost.addEventListener('pointerdown', (e) => {
+      charDragging = true; charLastX = e.clientX; charLastY = e.clientY;
+    });
+    addEventListener('pointerup', () => { charDragging = false; });
+    charHost.addEventListener('pointermove', (e) => {
+      if (!charDragging) return;
+      orbit.theta -= (e.clientX - charLastX) * 0.006;
+      orbit.phi = Math.min(Math.max(orbit.phi - (e.clientY - charLastY) * 0.006, 0.15), Math.PI - 0.15);
+      charLastX = e.clientX; charLastY = e.clientY;
+      applyCharCamera();
+    });
+    charHost.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      orbit.radius = Math.min(Math.max(orbit.radius * (e.deltaY > 0 ? 1.12 : 0.89), 0.8), 20);
+      applyCharCamera();
+    }, { passive: false });
+
+    (function charLoop() {
+      requestAnimationFrame(charLoop);
+      if (charAuto && !charDragging && avatar.vrm) {
+        orbit.theta += 0.004;
+        applyCharCamera();
+      }
+    })();
+
+    // ==================== 舞台场景（独立 glb 查看器） ====================
+    const glHost = document.getElementById('glStage');
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 舞台自发光材质更通透
+    renderer.toneMappingExposure = 1.25;
+    glHost.style.background = '#0c1220';
+    glHost.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0c1220);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
+    scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a2338, 0.9));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.4);
+    dir.position.set(3, 6, 4);
+    scene.add(dir);
+    const dir2 = new THREE.DirectionalLight(0x88aaff, 0.8);
+    dir2.position.set(-4, 3, -3);
+    scene.add(dir2);
+
+    // 简易轨道控制：左键拖拽环绕、滚轮缩放（vendor 未带 OrbitControls，手写零依赖）
+    const glOrbit = { theta: 0.6, phi: 1.15, radius: 10, target: new THREE.Vector3() };
+    let glDragging = false, glLastX = 0, glLastY = 0, autoSpin = true;
+    glHost.addEventListener('pointerdown', (e) => { glDragging = true; glLastX = e.clientX; glLastY = e.clientY; });
+    addEventListener('pointerup', () => { glDragging = false; });
+    glHost.addEventListener('pointermove', (e) => {
+      if (!glDragging) return;
+      glOrbit.theta -= (e.clientX - glLastX) * 0.006;
+      glOrbit.phi = Math.min(Math.max(glOrbit.phi - (e.clientY - glLastY) * 0.006, 0.15), Math.PI - 0.15);
+      glLastX = e.clientX; glLastY = e.clientY;
+    });
+    glHost.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      glOrbit.radius = Math.min(Math.max(glOrbit.radius * (e.deltaY > 0 ? 1.12 : 0.89), 1.5), 120);
+    }, { passive: false });
+
+    function applyGlCamera() {
+      const { theta, phi, radius, target } = glOrbit;
+      camera.position.set(
+        target.x + radius * Math.sin(phi) * Math.sin(theta),
+        target.y + radius * Math.cos(phi),
+        target.z + radius * Math.sin(phi) * Math.cos(theta),
+      );
+      camera.lookAt(target);
+    }
+
+    function fitTo(box) {
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+      glOrbit.target.copy(center);
+      glOrbit.radius = Math.max(size.x, size.y, size.z) * 1.5 + 2;
+      glOrbit.phi = 1.15;
+      return size.x.toFixed(1) + '×' + size.y.toFixed(1) + '×' + size.z.toFixed(1);
+    }
+
+    const loader = new GLTFLoader();
+    let glRoot = null;
+    async function showStage(name) {
+      document.getElementById('glStatus').textContent = `加载 ${name}…`;
+      if (glRoot) {
+        scene.remove(glRoot);
+        glRoot.traverse((o) => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach((m) => {
+              for (const k of Object.keys(m)) {
+                const v = m[k];
+                if (v && v.isTexture) v.dispose();
+              }
+              m.dispose();
+            });
+          }
+        });
+        glRoot = null;
+      }
+      const gltf = await loader.loadAsync(`/vrm/preview/stage/${name}.glb`);
+      glRoot = gltf.scene;
+      scene.add(glRoot);
+      const dims = fitTo(new THREE.Box3().setFromObject(glRoot));
+      document.getElementById('glStatus').textContent = `当前预览：${name}（尺寸 ${dims}m）`;
+    }
+
+    const stageBtns = document.getElementById('stageBtns');
+    const stages = ['CyberStage_AB', 'CyberStage_C_Screen', 'CyberStage_D'];
+    for (const name of stages) {
+      const btn = document.createElement('button');
+      btn.className = 'pick';
+      btn.textContent = name;
+      btn.addEventListener('click', async () => {
+        stageBtns.querySelectorAll('button').forEach((b) => (b.disabled = true));
+        try {
+          await showStage(name);
+          stageBtns.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+        } catch (err) {
+          document.getElementById('glStatus').textContent = '加载失败：' + (err?.message || err);
+        } finally {
+          stageBtns.querySelectorAll('button').forEach((b) => (b.disabled = false));
+        }
+      });
+      stageBtns.appendChild(btn);
+    }
+    const spinBtn = document.createElement('button');
+    spinBtn.className = 'pick active';
+    spinBtn.textContent = '自动旋转：开';
+    spinBtn.addEventListener('click', () => {
+      autoSpin = !autoSpin;
+      spinBtn.textContent = '自动旋转：' + (autoSpin ? '开' : '关');
+      spinBtn.classList.toggle('active', autoSpin);
+    });
+    stageBtns.appendChild(spinBtn);
+
+    // ---------- 页签切换与渲染循环 ----------
+    document.getElementById('tabChar').addEventListener('click', () => {
+      document.getElementById('tabChar').classList.add('active');
+      document.getElementById('tabStage').classList.remove('active');
+      document.getElementById('charCard').classList.remove('hidden');
+      document.getElementById('stageCard').classList.add('hidden');
+    });
+    document.getElementById('tabStage').addEventListener('click', () => {
+      document.getElementById('tabStage').classList.add('active');
+      document.getElementById('tabChar').classList.remove('active');
+      document.getElementById('stageCard').classList.remove('hidden');
+      document.getElementById('charCard').classList.add('hidden');
+    });
+
+    function resize() {
+      const w = glHost.clientWidth || 800;
+      const h = glHost.clientHeight || 500;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    (function loop() {
+      requestAnimationFrame(loop);
+      if (glRoot && autoSpin && !glDragging) glOrbit.theta += 0.003;
+      applyGlCamera();
+      renderer.render(scene, camera);
+    })();
+  </script>
+</body>
+</html>

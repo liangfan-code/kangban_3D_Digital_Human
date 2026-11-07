@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 登录</title>
+  <link rel="stylesheet" href="/css/main.css" />
+  <link rel="stylesheet" href="/css/login-bg.css" />
+</head>
+<body data-page="login">
+  <div class="login-bg" aria-hidden="true">
+    <video class="login-bg__video" autoplay muted loop playsinline
+           preload="metadata" disablepictureinpicture
+           poster="/media/tree-loop-06-login-poster.jpg" tabindex="-1">
+      <source src="/media/tree-loop-06-handheld-holo-particles-loop.mp4" type="video/mp4">
+    </video>
+    <div class="login-bg__scrim"></div>
+  </div>
+
+  <div class="topbar">
+    <div class="brand"><span class="logo">康伴</span><span class="sub">数字人康养陪伴系统</span></div>
+    <div class="flex-between" style="gap:10px;">
+      <span class="health-badge" id="health-badge"><span class="dot"></span>检测中…</span>
+      <a class="dev-only" href="/debug.html" style="text-decoration:none;">JWT 调试页（仅开发测试）</a>
+      <a class="dev-only" href="/avatar-gallery.html" target="_blank" rel="noopener" style="text-decoration:none;">3D 模型挑选预览</a>
+      <div class="theme-dots" id="theme-dots"></div>
+    </div>
+  </div>
+
+  <main class="page">
+    <section class="hero stagger">
+      <div class="title">康伴</div>
+      <p class="tagline">一位有温度的 3D 数字人伙伴，陪伴长者的每一天</p>
+    </section>
+
+    <section class="role-grid stagger" id="role-grid">
+      <!-- 家属 -->
+      <div class="role-card" data-role="family">
+        <div class="role-icon">💝</div>
+        <div class="role-name">家属</div>
+        <div class="role-desc">查看关联长者，了解近况</div>
+        <div class="role-login">
+          <div class="form-error" data-err></div>
+          <form data-login-form>
+            <input type="hidden" name="role" value="family" />
+            <div class="field"><label>用户名</label><input name="username" autocomplete="username" required /></div>
+            <div class="field"><label>密码</label><input name="password" type="password" autocomplete="current-password" required /></div>
+            <button class="btn btn-primary" style="width:100%;" type="submit">登录</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- 老人（设备身份） -->
+      <div class="role-card" data-role="elder">
+        <div class="role-icon">🌿</div>
+        <div class="role-name">老人（设备入口）</div>
+        <div class="role-desc">长者平板凭设备 Token 进入</div>
+        <div class="role-login">
+          <div class="form-error" data-err></div>
+          <button class="btn btn-primary" id="biometric-entry" type="button" style="width:100%;">🖐️ 老人生物识别进入</button>
+          <div class="hint" style="text-align:center;">声纹 / 指纹识别进入（推荐长者使用）</div>
+          <hr class="divider" style="margin:12px 0;">
+          <form id="device-token-form">
+            <div class="field">
+              <label>设备 Token</label>
+              <input name="token" placeholder="粘贴注册时保存的设备 Token" required />
+            </div>
+            <button class="btn btn-primary" style="width:100%;" type="submit">进入设备页</button>
+          </form>
+          <div class="login-extra">
+            <details>
+              <summary>首次使用？用一次性注册凭证换取 Token</summary>
+              <form id="device-register-form" class="mt-8">
+                <div class="field"><label>设备编号</label><input name="device_code" placeholder="如 ACC1-TAB-001" required /></div>
+                <div class="field"><label>一次性注册凭证</label><input name="registration_token" required /></div>
+                <button class="btn btn-ghost" style="width:100%;" type="submit">换取设备 Token</button>
+              </form>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <!-- 护工 -->
+      <div class="role-card" data-role="nurse">
+        <div class="role-icon">🧑‍⚕️</div>
+        <div class="role-name">护工</div>
+        <div class="role-desc">所辖楼栋长者的日常照护</div>
+        <div class="role-login">
+          <div class="form-error" data-err></div>
+          <form data-login-form>
+            <input type="hidden" name="role" value="nurse" />
+            <div class="field"><label>用户名</label><input name="username" autocomplete="username" required /></div>
+            <div class="field"><label>密码</label><input name="password" type="password" autocomplete="current-password" required /></div>
+            <button class="btn btn-primary" style="width:100%;" type="submit">登录</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- 管理员 -->
+      <div class="role-card" data-role="admin">
+        <div class="role-icon">🗝️</div>
+        <div class="role-name">管理员</div>
+        <div class="role-desc">房间 / 人设 / 设备 / 账号管理</div>
+        <div class="role-login">
+          <div class="form-error" data-err></div>
+          <form data-login-form>
+            <input type="hidden" name="role" value="admin" />
+            <div class="field"><label>用户名</label><input name="username" autocomplete="username" required /></div>
+            <div class="field"><label>密码</label><input name="password" type="password" autocomplete="current-password" required /></div>
+            <button class="btn btn-primary" style="width:100%;" type="submit">登录</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- 医生 -->
+      <div class="role-card" data-role="doctor">
+        <div class="role-icon">🩺</div>
+        <div class="role-name">医生</div>
+        <div class="role-desc">负责长者的关联档案</div>
+        <div class="role-login">
+          <div class="form-error" data-err></div>
+          <form data-login-form>
+            <input type="hidden" name="role" value="doctor" />
+            <div class="field"><label>用户名</label><input name="username" autocomplete="username" required /></div>
+            <div class="field"><label>密码</label><input name="password" type="password" autocomplete="current-password" required /></div>
+            <button class="btn btn-primary" style="width:100%;" type="submit">登录</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <p class="faint mt-24" style="text-align:center;">
+      登录即代表同意本社区数字服务约定 · 本系统不做医疗诊断，紧急情况请按呼叫器
+    </p>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <style>
+    /* 指纹图标（参考图原样）：夜空黑主题下反色显示 */
+    html[data-theme="inknight"] .fp-icon { filter: invert(1); }
+  </style>
+  <script src="/js/login-bg.js"></script>
+  <script>
+    // ============================================================
+    // 老人生物识别进入（演示功能，后端开关 BIOMETRIC_DEMO_ENABLED）
+    // 流程：房间号大按钮网格 → 声纹（真比对 Day3 声纹库）/ 指纹（教学演示直进）
+    // 铁律：任何失败分支都要大字可见提示，绝不静默；不影响旁边 Token 登录
+    // ============================================================
+    (function () {
+      "use strict";
+      var BIOMETRIC_LOGIN = "/api/v1/voice/biometric/login";
+      var BIOMETRIC_ROOMS = "/api/v1/voice/biometric/rooms";
+      var RECORD_SECONDS = 5; // 与 Day3 声纹录入一致的 5 秒窗
+
+      var entry = document.getElementById("biometric-entry");
+      if (!entry) return;
+
+      // ---- 采集 5 秒 16k PCM16（复用 /js/audio-worklet.js 采集协议）----
+      function recordPcm16(seconds, onCountdown) {
+        return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+          var ctx = new (window.AudioContext || window.webkitAudioContext)();
+          var src = null;
+          return ctx.audioWorklet.addModule("/js/audio-worklet.js").then(function () {
+            src = ctx.createMediaStreamSource(stream);
+            var node = new AudioWorkletNode(ctx, "capture-processor");
+            src.connect(node); // 不连 destination，避免回放啸叫
+            var chunks = [];
+            var stopped = false;
+            var total = 0;
+            return new Promise(function (resolve) {
+              var timer = setInterval(function () {
+                var left = Math.ceil(seconds - total / ctx.sampleRate);
+                if (onCountdown && left >= 0) onCountdown(left);
+              }, 250);
+              node.port.onmessage = function (e) {
+                if (stopped) return;
+                chunks.push(e.data);
+                total += e.data.length;
+                if (total >= ctx.sampleRate * seconds) {
+                  stopped = true;
+                  clearInterval(timer);
+                  // 降采样到 16k → int16
+                  var flat = new Float32Array(total);
+                  var off = 0;
+                  chunks.forEach(function (c) { flat.set(c, off); off += c.length; });
+                  var ratio = ctx.sampleRate / 16000;
+                  var outLen = Math.floor(flat.length / ratio);
+                  var pcm = new Int16Array(outLen);
+                  for (var i = 0; i < outLen; i++) {
+                    var s = flat[Math.floor(i * ratio)];
+                    pcm[i] = Math.max(-32768, Math.min(32767, Math.round(s * 32767)));
+                  }
+                  try { src.disconnect(); } catch (err) {}
+                  ctx.close().catch(function () {});
+                  stream.getTracks().forEach(function (t) { t.stop(); });
+                  resolve(pcm);
+                }
+              };
+            });
+          }).catch(function (e) {
+            try { ctx.close(); } catch (err) {}
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            throw e;
+          });
+        });
+      }
+
+      function pcmToBase64(pcm) {
+        var bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+        var bin = "";
+        var CHUNK = 0x8000;
+        for (var i = 0; i < bytes.length; i += CHUNK) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(bin);
+      }
+
+      function goElderPage(data) {
+        sessionStorage.setItem("kb_token", data.access_token);
+        // 与设备 Token 登录同款：elder.html 靠 /devices/me 校验设备身份
+        window.location.href = "/elder.html";
+      }
+
+      function bigMsg(text, kind) {
+        return "<div style='text-align:center;font-size:22px;padding:10px 0;color:" +
+          (kind === "err" ? "var(--lacquer,#8a2e1f)" : "var(--moss,#55754f)") + ";'>" + KB.esc(text) + "</div>";
+      }
+
+      // ---- 第 1 步：房间号网格 ----
+      function openRoomPicker() {
+        var m = KB.openModal(
+          "<h3>请点一下自己的房间号</h3>" +
+          "<div id='bio-rooms' class='state' style='min-height:120px;'><span class='big'>⏳</span>正在获取房间…</div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' id='bio-back'>关闭</button></div>"
+        );
+        m.modal.querySelector("#bio-back").addEventListener("click", m.close);
+        KB.api("GET", BIOMETRIC_ROOMS).then(function (data) {
+          var grid = m.modal.querySelector("#bio-rooms");
+          grid.className = "";
+          grid.innerHTML = "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:12px;'>" +
+            (data.items || []).map(function (r) {
+              var sub = r.elders.length ? KB.esc(r.elders.join("、")) :
+                (r.device_code ? "设备 " + KB.esc(r.device_code) : "<span style='color:var(--ink-faint);'>无在住长者/设备</span>");
+              return "<button class='btn " + (r.device_code ? "btn-primary" : "btn-ghost") + "' data-room='" + r.room_id + "'" +
+                " style='padding:16px 8px;min-height:72px;display:flex;flex-direction:column;justify-content:center;'>" +
+                "<span style='font-size:22px;font-weight:700;'>" + KB.esc(r.label) + "</span>" +
+                "<span style='font-size:14px;font-weight:400;'>" + sub + "</span></button>";
+            }).join("") + "</div>";
+          if (!(data.items || []).length) grid.innerHTML = bigMsg("还没有房间，请先在管理台创建", "err");
+          grid.querySelectorAll("[data-room]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var room = data.items.find(function (r) { return r.room_id === b.dataset.room; });
+              if (!room) return;
+              if (!room.device_code) { KB.toast("该房间没有可用设备，无法进入", "error"); return; }
+              openMethodPicker(room);
+            });
+          });
+        }).catch(function (e) {
+          m.modal.querySelector("#bio-rooms").innerHTML = bigMsg(KB.errText(e), "err") +
+            "<div class='modal-actions'><button class='btn btn-ghost' id='bio-retry'>重试</button></div>";
+          var retry = m.modal.querySelector("#bio-retry");
+          if (retry) retry.addEventListener("click", function () { m.close(); openRoomPicker(); });
+        });
+      }
+
+      // 指纹图标（用户指定样式原图，透明底单色 PNG；夜空黑主题经 CSS 反色）
+      var FP_IMG = "<img class='fp-icon' src='/media/fingerprint-icon.png' alt='指纹' draggable='false' style='width:1em;height:auto;vertical-align:-0.08em;'>";
+
+      // ---- 第 2 步：声纹 / 指纹二选一 ----
+      function openMethodPicker(room) {
+        var m = KB.openModal(
+          "<h3>房间 " + KB.esc(room.label) + " · 请选择进入方式</h3>" +
+          "<div id='bio-body'>" +
+          "<div style='display:grid;gap:14px;'>" +
+          "<button class='btn btn-primary' id='bio-voice' style='padding:20px;font-size:20px;'>🎤 声纹识别进入（对着麦克风说句话）</button>" +
+          "<button class='btn btn-ghost' id='bio-finger' style='padding:20px;font-size:20px;display:flex;flex-direction:column;align-items:center;gap:8px;'>" +
+          "<span style='font-size:48px;line-height:1;'>" + FP_IMG + "</span>" +
+          "<span>指纹识别进入</span>" +
+          "<span style='font-size:14px;font-weight:400;color:var(--ink-soft);'>（指纹无硬件设施，点击指纹图标即可直接登录，仅做教学演示）</span>" +
+          "</button></div></div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' id='bio-back'>返回房间列表</button></div>"
+        );
+        m.modal.querySelector("#bio-back").addEventListener("click", function () { m.close(); openRoomPicker(); });
+        m.modal.querySelector("#bio-finger").addEventListener("click", function () { doFingerprint(room, m); });
+        m.modal.querySelector("#bio-voice").addEventListener("click", function () { doVoiceprint(room, m); });
+      }
+
+      // ---- 指纹：点击图标即进（教学演示直进，后端签发真实设备 Token）----
+      function doFingerprint(room, prev) {
+        var m = KB.openModal(
+          "<h3>房间 " + KB.esc(room.label) + " · 指纹登录</h3>" +
+          "<div id='bio-body' style='text-align:center;padding:10px 0;'>" +
+          "<button id='bio-finger-go' style='background:none;border:none;cursor:pointer;font-size:110px;line-height:1.1;color:var(--clay);transition:transform .15s;'" +
+          " title='点击指纹图标直接登录'>" + FP_IMG + "</button>" +
+          "<div style='font-size:14px;color:var(--ink-soft);padding-bottom:8px;'>（指纹无硬件设施，点击指纹图标即可直接登录，仅做教学演示）</div>" +
+          "</div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' id='bio-back'>返回</button></div>"
+        );
+        prev.close();
+        m.modal.querySelector("#bio-back").addEventListener("click", function () { m.close(); openMethodPicker(room); });
+        m.modal.querySelector("#bio-finger-go").addEventListener("click", function () {
+          var body = m.modal.querySelector("#bio-body");
+          body.innerHTML = "<div class='skeleton'><div class='bar w60'></div></div>";
+          KB.api("POST", BIOMETRIC_LOGIN, { room_id: room.room_id, mode: "fingerprint" })
+            .then(function (data) {
+              body.innerHTML = bigMsg("✅ 验证通过，正在进入 " + data.room + "…");
+              setTimeout(function () { goElderPage(data); }, 600);
+            })
+            .catch(function (e) {
+              body.innerHTML = bigMsg("⚠ " + KB.errText(e), "err");
+            });
+        });
+      }
+
+      // ---- 声纹：5 秒倒计时录音 → 后端真比对 Day3 声纹库 ----
+      function doVoiceprint(room, prev) {
+        var m = KB.openModal(
+          "<h3>房间 " + KB.esc(room.label) + " · 声纹登录</h3>" +
+          "<div id='bio-body' style='text-align:center;padding:8px 0;'>" +
+          "<div style='font-size:44px;'>🎤</div>" +
+          "<div id='bio-voice-tip' style='font-size:20px;padding:8px 0;'>请对着麦克风说一句话，例如「今天天气真好」</div>" +
+          "<div id='bio-voice-count' style='font-size:52px;font-weight:700;color:var(--clay,#ad4a26);'>" + RECORD_SECONDS + "</div>" +
+          "</div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' id='bio-back'>返回</button></div>"
+        );
+        prev.close();
+        var body = m.modal.querySelector("#bio-body");
+        m.modal.querySelector("#bio-back").addEventListener("click", function () { m.close(); openMethodPicker(room); });
+
+        function fail(msg) { body.innerHTML = bigMsg("⚠ " + msg, "err"); }
+        function start() {
+          var tip = m.modal.querySelector("#bio-voice-tip");
+          var count = m.modal.querySelector("#bio-voice-count");
+          if (!tip || !count) return; // 弹窗已被用户关闭
+          tip.textContent = "请开始说话…";
+          recordPcm16(RECORD_SECONDS, function (left) {
+            var c = m.modal.querySelector("#bio-voice-count");
+            if (c) c.textContent = Math.max(0, left);
+          }).then(function (pcm) {
+            var t = m.modal.querySelector("#bio-voice-tip");
+            if (t) t.textContent = "正在比对声纹…";
+            return KB.api("POST", BIOMETRIC_LOGIN, {
+              room_id: room.room_id,
+              mode: "voiceprint",
+              audio_samples: [pcmToBase64(pcm)],
+            }).then(function (data) {
+              var b = m.modal.querySelector("#bio-body");
+              if (!b) return;
+              b.innerHTML = bigMsg("✅ 声纹验证通过（相似度 " + (data.score != null ? data.score : "—") +
+                (data.matched_elder ? " · " + data.matched_elder : "") + "），正在进入 " + data.room + "…");
+              setTimeout(function () { goElderPage(data); }, 900);
+            });
+          }).catch(function (e) {
+            var b = m.modal.querySelector("#bio-body");
+            if (!b) return;
+            b.innerHTML = bigMsg("⚠ " + KB.errText(e), "err") +
+              "<button class='btn btn-primary' id='bio-voice-retry' style='width:100%;padding:14px;font-size:18px;'>再试一次</button>";
+            var retry = m.modal.querySelector("#bio-voice-retry");
+            if (retry) retry.addEventListener("click", start);
+          });
+        }
+        start();
+      }
+
+      entry.addEventListener("click", openRoomPicker);
+    })();
+  </script>
+  <script>
+    (function () {
+      "use strict";
+      var REDIRECT = { admin: "/admin.html", nurse: "/nurse.html", doctor: "/doctor.html", family: "/family.html" };
+      KB.bindHealthBadge(document.getElementById("health-badge"));
+
+      // 角色卡展开登录表单
+      document.querySelectorAll(".role-card").forEach(function (card) {
+        card.addEventListener("click", function (ev) {
+          if (ev.target.closest("form") || ev.target.closest("summary")) return;
+          var wasOpen = card.classList.contains("open");
+          document.querySelectorAll(".role-card.open").forEach(function (c) { c.classList.remove("open"); });
+          if (!wasOpen) card.classList.add("open");
+        });
+      });
+
+      function showErr(card, msg) {
+        var box = card.querySelector("[data-err]");
+        box.innerHTML = "⚠ " + KB.esc(msg);
+        box.classList.add("show");
+      }
+      function clearErr(card) {
+        var box = card.querySelector("[data-err]");
+        if (box) { box.classList.remove("show"); box.innerHTML = ""; }
+      }
+
+      // 人账号登录
+      document.querySelectorAll("[data-login-form]").forEach(function (form) {
+        form.addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var card = form.closest(".role-card");
+          clearErr(card);
+          var expectRole = form.elements.role.value;
+          var btn = form.querySelector("button[type=submit]");
+          btn.disabled = true;
+          KB.api("POST", "/api/v1/auth/login", {
+            username: form.elements.username.value.trim(),
+            password: form.elements.password.value,
+          }).then(function (data) {
+            if (data.role !== expectRole) {
+              showErr(card, "该账号角色为「" + data.role + "」，请从对应入口登录");
+              return;
+            }
+            data.username = form.elements.username.value.trim();
+            data.display_name = data.display_name || data.username;
+            // 拉取 display_name 后跳转
+            sessionStorage.setItem("kb_token", data.access_token);
+            sessionStorage.setItem("kb_role", data.role);
+            return KB.api("GET", "/api/v1/auth/me/user").then(function (me) {
+              data.display_name = me.display_name;
+              KB.saveSession(data);
+              window.location.href = REDIRECT[data.role] || "/index.html";
+            });
+          }).catch(function (e) {
+            if (e && e.message === "redirect") return;
+            showErr(card, KB.errText(e));
+          }).finally(function () { btn.disabled = false; });
+        });
+      });
+
+      // 老人：设备 Token 直接进入
+      document.getElementById("device-token-form").addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        var card = this.closest(".role-card");
+        clearErr(card);
+        var token = this.elements.token.value.trim();
+        sessionStorage.setItem("kb_token", token);
+        KB.api("GET", "/api/v1/auth/me").then(function (me) {
+          if (!me.device_code) throw new Error("这不是有效的设备 Token，请从家人/工作人员入口登录");
+          window.location.href = "/elder.html";
+        }).catch(function (e) {
+          if (e && e.message === "redirect") return;
+          sessionStorage.removeItem("kb_token");
+          showErr(card, KB.errText(e));
+        });
+      });
+
+      // 老人：一次性注册凭证换 Token
+      document.getElementById("device-register-form").addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        var card = this.closest(".role-card");
+        clearErr(card);
+        var btn = this.querySelector("button[type=submit]");
+        btn.disabled = true;
+        KB.api("POST", "/api/v1/auth/device/register", {
+          device_code: this.elements.device_code.value.trim(),
+          registration_token: this.elements.registration_token.value.trim(),
+        }).then(function (data) {
+          sessionStorage.setItem("kb_token", data.access_token);
+          // 一次性展示设备 Token，用户确认保存后再进入设备页
+          var m = KB.openModal(
+            "<h3>设备 Token（长期有效）</h3>" +
+            "<div class='warn-line'>⚠ <span>请立即复制保存，关闭后不可再次查看。</span></div>" +
+            "<div class='secret-box'>" + KB.esc(data.access_token) + "</div>" +
+            "<div class='modal-actions'>" +
+            "<button class='btn btn-ghost' id='reg-copy'>复制</button>" +
+            "<button class='btn btn-primary' id='reg-go'>我已保存，进入设备页</button>" +
+            "</div>"
+          );
+          m.modal.querySelector("#reg-copy").addEventListener("click", function () {
+            KB.copyText(data.access_token).then(function (ok) {
+              KB.toast(ok ? "已复制到剪贴板" : "复制失败，请手动选择复制", ok ? "success" : "error");
+            });
+          });
+          m.modal.querySelector("#reg-go").addEventListener("click", function () {
+            m.close();
+            window.location.href = "/elder.html";
+          });
+        }).catch(function (e) {
+          if (e && e.message === "redirect") return;
+          showErr(card, KB.errText(e));
+        }).finally(function () { btn.disabled = false; });
+      });
+
+      // 主题色点：放在所有交互绑定之后 + 类型守卫，
+      // 即使浏览器缓存了旧版 api.js（无此函数）也不会阻断登录等核心交互
+      if (typeof KB.renderThemeDots === "function") {
+        KB.renderThemeDots(document.getElementById("theme-dots"));
+      }
+    })();
+  </script>
+</body>
+</html>

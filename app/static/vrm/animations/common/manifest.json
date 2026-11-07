@@ -1,0 +1,162 @@
+[
+  {
+    "file": "idle.vrma",
+    "name": "自然待机",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/idle.vrma",
+    "license": "Apache-2.0",
+    "sha256": "9563c582418bd5b51da473ea85b41722cb5304f84128935c3b570c72316c444a",
+    "durationSeconds": 10
+  },
+  {
+    "file": "idle-2.vrma",
+    "name": "待机变化",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/idle-2.vrma",
+    "license": "Apache-2.0",
+    "sha256": "7985c8621c2fb965b7d6f5236efa885cfa7fa92995d544f470dc0028864efa13",
+    "durationSeconds": 30.033
+  },
+  {
+    "file": "idle-talking.vrma",
+    "name": "站立说话",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/idle-talking.vrma",
+    "license": "Apache-2.0",
+    "sha256": "74f50c1b63bb8c2b19276dd7db26c9e8096da72acb521d4e635b059730e78bd8",
+    "durationSeconds": 7.1
+  },
+  {
+    "file": "idle-talking-6.vrma",
+    "name": "左手说话手势",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/idle-talking-6.vrma",
+    "license": "Apache-2.0",
+    "sha256": "1648d8a03d7e563cad203fa88b80cfd7629e70292cbcc406bc730ac1ffc8bf60",
+    "durationSeconds": 16.633
+  },
+  {
+    "file": "idle-talking-7.vrma",
+    "name": "右手说话手势",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/idle-talking-7.vrma",
+    "license": "Apache-2.0",
+    "sha256": "b5d9605ebb566fb811b52e81fa826ad3b47601d349994540c65a33a001ed1aac",
+    "durationSeconds": 16.733
+  },
+  {
+    "file": "nod.vrma",
+    "name": "点头",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/nod.vrma",
+    "license": "Apache-2.0",
+    "sha256": "c5f715092eacacc827b52c984ebd5c8b8d991b2e34102fbc03235b01c6bcbbe8",
+    "durationSeconds": 1.767
+  },
+  {
+    "file": "nod-3.vrma",
+    "name": "点头同意",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/nod-3.vrma",
+    "license": "Apache-2.0",
+    "sha256": "6a0b24b783b8436f61dc66d87aaecff96b8b9226b58a20d051c4a660129a8d84",
+    "durationSeconds": 3.1
+  },
+  {
+    "file": "shake.vrma",
+    "name": "摇头",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/shake.vrma",
+    "license": "Apache-2.0",
+    "sha256": "99b6349e0df9eec08c50eb2285935114692bb0d9b0e78dd9f754a6f7e5fdce23",
+    "durationSeconds": 3.633
+  },
+  {
+    "file": "think.vrma",
+    "name": "环顾思考",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/think.vrma",
+    "license": "Apache-2.0",
+    "sha256": "e28485c2606b4b27869dee84d0a4be7cff9d6eb1a573cf1ea33b3d5a4b5aa3f9",
+    "durationSeconds": 3.367
+  },
+  {
+    "file": "neutral.vrma",
+    "name": "歪头",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/neutral.vrma",
+    "license": "Apache-2.0",
+    "sha256": "91642c3593383d6b8e3d7ae2e5e408abac89a2baa31d2c1a3b625a46b0ab92b6",
+    "durationSeconds": 5.067
+  },
+  {
+    "file": "happy.vrma",
+    "name": "鼓掌",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/happy.vrma",
+    "license": "Apache-2.0",
+    "sha256": "55b69cf6ed4213adeba1279cb85015c136cbaa5ecefc5211f4f595fc454d6b39",
+    "durationSeconds": 5.3
+  },
+  {
+    "file": "happy-2.vrma",
+    "name": "鼓掌变化",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/happy-2.vrma",
+    "license": "Apache-2.0",
+    "sha256": "7bc4b0a91cd1feb0afee4600d5f8d800ba3bc64c07b96ca0faf637ed6da6f9e1",
+    "durationSeconds": 3.767
+  },
+  {
+    "file": "sad.vrma",
+    "name": "低头失落",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/sad.vrma",
+    "license": "Apache-2.0",
+    "sha256": "7d011478fbff385bdde6ea0314a4035740571c5fdfb9902c8799fdb8ce189626",
+    "durationSeconds": 3.267
+  },
+  {
+    "file": "angry.vrma",
+    "name": "不满摇头",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/angry.vrma",
+    "license": "Apache-2.0",
+    "sha256": "02868bf70e858854013e37bca4b945e334eddfb509a4b90c73791cf18f96f6d6",
+    "durationSeconds": 2.3
+  },
+  {
+    "file": "relaxed.vrma",
+    "name": "伸展脖颈",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/relaxed.vrma",
+    "license": "Apache-2.0",
+    "sha256": "5e3849bc677f63fb5952583c39102ffdf1adb08b32baa3e4b9de54630a3bb3b9",
+    "durationSeconds": 5.567
+  },
+  {
+    "file": "raise-hand.vrma",
+    "name": "举手",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/raise-hand.vrma",
+    "license": "Apache-2.0",
+    "sha256": "5ff6ce4aaf5bbf0afa93efbb5bbf31cff39e9a844378ac723feaefcc05235a97",
+    "durationSeconds": 9.967
+  },
+  {
+    "file": "world-walk-back.vrma",
+    "name": "后退行走",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/world-walk-back.vrma",
+    "license": "Apache-2.0",
+    "sha256": "fdc440558453bebc19c826ff0b892faa4d9452b23e7e02ea32be9cba0612d850",
+    "durationSeconds": 1.233
+  },
+  {
+    "file": "world-sit-idle.vrma",
+    "name": "坐姿待机",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/world-sit-idle.vrma",
+    "license": "Apache-2.0",
+    "sha256": "086e0882a1ca3f793cd06972a2f23167e182a02ac9bb63eec1c82b382e88026a",
+    "durationSeconds": 13.333
+  },
+  {
+    "file": "world-sit-talking.vrma",
+    "name": "坐姿说话",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/world-sit-talking.vrma",
+    "license": "Apache-2.0",
+    "sha256": "6b4bd3302df5537fe2a82551b3e36450e96d52381c3050bb428577956b9b86f1",
+    "durationSeconds": 7.133
+  },
+  {
+    "file": "world-sit-look.vrma",
+    "name": "坐姿环顾",
+    "source": "https://raw.githubusercontent.com/Undi95/Hanami/main/vrma/world-sit-look.vrma",
+    "license": "Apache-2.0",
+    "sha256": "fc2fc25d575ef246ca5698601c1e61759a3807bc267afb92f61cc901f2b840aa",
+    "durationSeconds": 10.767
+  }
+]

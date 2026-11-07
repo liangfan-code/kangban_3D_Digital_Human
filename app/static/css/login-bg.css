@@ -1,0 +1,89 @@
+/* ============================================================
+   康伴 · 登录页视频背景（仅 index.html 引用，勿引入其他页面）
+   作用域铁律：所有规则以 body[data-page="login"] 开头——
+   即使本文件被误引到其他页面，任何规则都不会生效。
+   不改 main.css（它被 8 个页面共享）。
+   ============================================================ */
+
+/* body 背景让位给视频层；html 仍保留 main.css 的 var(--paper)——
+   视频加载失败/被拦截时页面退回原主题底色，不黑块不白闪 */
+body[data-page="login"] {
+  background: transparent;
+}
+
+/* ---- 背景容器：海报兜底层 + 视频层 + 遮罩层 ---- */
+body[data-page="login"] .login-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;            /* 置于全部内容之下（html 背景之上） */
+  overflow: hidden;
+  pointer-events: none;   /* 纯装饰层，绝不拦截表单交互 */
+  /* 海报兜底：自动播放被拦截/视频加载失败时画面不空（取自视频第 0 帧，切换不跳） */
+  background: url("/media/tree-loop-06-login-poster.jpg") center / cover no-repeat;
+}
+
+body[data-page="login"] .login-bg__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;      /* 1080p 原生清晰度，不缩放不裁剪变形 */
+}
+
+/* 降级态：隐藏视频元素，露出容器上的海报 */
+body[data-page="login"] .login-bg.is-fallback .login-bg__video {
+  display: none;
+}
+
+/* ---- 遮罩：仅 10% 淡纱（视频近原样展示，2026-11-05 用户裁决）
+   base 为均匀 10% 纱；底部轻微加深只为托住登录条款小字；
+   可读性由文字极轻投影兜底（见下方 text-shadow 规则） ---- */
+body[data-page="login"] .login-bg__scrim {
+  position: absolute;
+  inset: 0;
+  /* 陶瓷白（默认主题，html 无 data-theme）：10% 亮纱 */
+  background: linear-gradient(to bottom,
+    rgba(252, 251, 249, 0.10),
+    rgba(252, 251, 249, 0.10) 80%,
+    rgba(252, 251, 249, 0.28) 96%);
+}
+
+/* 暖陶雅集：同构，纱色随 --paper 暖调 */
+html[data-theme="terracotta"] body[data-page="login"] .login-bg__scrim {
+  background: linear-gradient(to bottom,
+    rgba(247, 242, 233, 0.10),
+    rgba(247, 242, 233, 0.10) 80%,
+    rgba(247, 242, 233, 0.28) 96%);
+}
+
+/* 夜空黑：10% 暗纱（用户知情选择；浅字可读性由暗色文字投影兜底） */
+html[data-theme="inknight"] body[data-page="login"] .login-bg__scrim {
+  background: linear-gradient(to bottom,
+    rgba(8, 9, 12, 0.10),
+    rgba(8, 9, 12, 0.10) 80%,
+    rgba(8, 9, 12, 0.30) 96%);
+}
+
+/* ---- 文字极轻投影：仅在视频亮/暗区上撑住可读性，肉眼几乎无感 ---- */
+/* 浅色主题（深字）：白色微光晕，防画面暗角吃掉深字 */
+body[data-page="login"] .hero .title,
+body[data-page="login"] .hero .tagline {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55), 0 0 6px rgba(255, 255, 255, 0.35);
+}
+body[data-page="login"] main .faint {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+}
+/* 夜空黑（浅字）：暗色微晕，防太阳高光吃掉浅字 */
+html[data-theme="inknight"] body[data-page="login"] .hero .title,
+html[data-theme="inknight"] body[data-page="login"] .hero .tagline {
+  text-shadow: 0 1px 3px rgba(8, 9, 12, 0.65), 0 0 8px rgba(8, 9, 12, 0.45);
+}
+html[data-theme="inknight"] body[data-page="login"] main .faint {
+  text-shadow: 0 1px 2px rgba(8, 9, 12, 0.7);
+}
+
+/* ---- 减弱动效偏好：不播视频，只显示海报 ---- */
+@media (prefers-reduced-motion: reduce) {
+  body[data-page="login"] .login-bg__video {
+    display: none;
+  }
+}

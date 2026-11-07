@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "asset_root": "/vrm/animations/common/",
+  "model_url": "/vrm/models/Yoimiya.vrm",
+  "marker": {
+    "format": "[act:<action_id>] 或 [act:<action_id>:<repeat>]",
+    "placement": "sentence_start",
+    "max_per_reply": 2,
+    "no_repeat_consecutive": true,
+    "unknown_action": "drop",
+    "note": "标记只表达动作，必须放在一句话的最开头、紧贴正文；标记不会被朗读、不进字幕。"
+  },
+  "base": {
+    "idle": {
+      "label": "待机",
+      "usage": "未说话、拨号等待、挂断后复位时使用；循环播放，呼吸与轻微晃动来自动画本身。",
+      "loop": true,
+      "clips": [
+        { "file": "idle.vrma", "duration_seconds": 10.0 },
+        { "file": "idle-2.vrma", "duration_seconds": 30.033 }
+      ]
+    },
+    "talking": {
+      "label": "说话",
+      "usage": "检测到 TTS 远端音频能量时使用；每轮随机选一条手势动画，循环播放直到静音。",
+      "loop": true,
+      "clips": [
+        { "file": "idle-talking.vrma", "duration_seconds": 7.1 },
+        { "file": "idle-talking-6.vrma", "duration_seconds": 16.633 },
+        { "file": "idle-talking-7.vrma", "duration_seconds": 16.733 }
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "wave",
+      "label": "挥手招呼",
+      "category": "greeting",
+      "usage": "打招呼、欢迎长者、刚开始通话时使用",
+      "clips": [{ "file": "raise-hand.vrma", "duration_seconds": 9.967 }],
+      "loop": false,
+      "stackable": true,
+      "priority": 60,
+      "interruptible": false,
+      "min_interval_seconds": 8
+    },
+    {
+      "id": "bye",
+      "label": "挥手告别",
+      "category": "farewell",
+      "usage": "长者说再见、结束通话时使用",
+      "clips": [{ "file": "raise-hand.vrma", "duration_seconds": 9.967 }],
+      "loop": false,
+      "stackable": true,
+      "priority": 60,
+      "interruptible": false,
+      "min_interval_seconds": 8
+    },
+    {
+      "id": "nod",
+      "label": "点头",
+      "category": "agree",
+      "usage": "表示同意、理解、鼓励或回应「好的」时使用",
+      "clips": [
+        { "file": "nod.vrma", "duration_seconds": 1.767 },
+        { "file": "nod-3.vrma", "duration_seconds": 3.1 }
+      ],
+      "loop": false,
+      "stackable": true,
+      "priority": 30,
+      "interruptible": true,
+      "min_interval_seconds": 3
+    },
+    {
+      "id": "shake",
+      "label": "摇头",
+      "category": "deny",
+      "usage": "表示否定、不建议、拒绝时使用；语气要温和",
+      "clips": [
+        { "file": "shake.vrma", "duration_seconds": 3.633 },
+        { "file": "angry.vrma", "duration_seconds": 2.3 }
+      ],
+      "loop": false,
+      "stackable": true,
+      "priority": 45,
+      "interruptible": true,
+      "min_interval_seconds": 5
+    },
+    {
+      "id": "clap",
+      "label": "鼓掌",
+      "category": "celebrate",
+      "usage": "表达开心、祝贺、表扬或鼓励长者时使用",
+      "clips": [
+        { "file": "happy.vrma", "duration_seconds": 5.3 },
+        { "file": "happy-2.vrma", "duration_seconds": 3.767 }
+      ],
+      "loop": false,
+      "stackable": true,
+      "priority": 50,
+      "interruptible": true,
+      "min_interval_seconds": 6
+    },
+    {
+      "id": "think",
+      "label": "思考",
+      "category": "think",
+      "usage": "需要思考、回忆、犹豫或组织语言时使用",
+      "clips": [{ "file": "think.vrma", "duration_seconds": 3.367 }],
+      "loop": false,
+      "stackable": true,
+      "priority": 35,
+      "interruptible": true,
+      "min_interval_seconds": 5
+    },
+    {
+      "id": "tilt",
+      "label": "歪头倾听",
+      "category": "listen",
+      "usage": "倾听、疑惑、没听清请对方再说一遍时使用",
+      "clips": [{ "file": "neutral.vrma", "duration_seconds": 5.067 }],
+      "loop": false,
+      "stackable": true,
+      "priority": 20,
+      "interruptible": true,
+      "min_interval_seconds": 4
+    },
+    {
+      "id": "comfort",
+      "label": "低头共情",
+      "category": "comfort",
+      "usage": "长者情绪低落、身体不舒服、表达担忧时用于共情安抚",
+      "clips": [{ "file": "sad.vrma", "duration_seconds": 3.267 }],
+      "loop": false,
+      "stackable": true,
+      "priority": 45,
+      "interruptible": true,
+      "min_interval_seconds": 8
+    },
+    {
+      "id": "stretch",
+      "label": "伸展放松",
+      "category": "stretch",
+      "usage": "久坐提醒、建议起身活动或伸展肩颈时使用；仅空闲时可播放",
+      "clips": [{ "file": "relaxed.vrma", "duration_seconds": 5.567 }],
+      "loop": false,
+      "stackable": false,
+      "priority": 25,
+      "interruptible": true,
+      "min_interval_seconds": 10
+    }
+  ],
+  "inventory": [
+    { "file": "idle.vrma", "name": "自然待机", "duration_seconds": 10.0, "loop": true, "category": "idle", "usage": "待机呼吸", "enabled": true },
+    { "file": "idle-2.vrma", "name": "待机变化", "duration_seconds": 30.033, "loop": true, "category": "idle", "usage": "待机变化姿态", "enabled": true },
+    { "file": "idle-talking.vrma", "name": "站立说话", "duration_seconds": 7.1, "loop": true, "category": "talking", "usage": "说话时基础手势", "enabled": true },
+    { "file": "idle-talking-6.vrma", "name": "左手说话手势", "duration_seconds": 16.633, "loop": true, "category": "talking", "usage": "说话时左手手势", "enabled": true },
+    { "file": "idle-talking-7.vrma", "name": "右手说话手势", "duration_seconds": 16.733, "loop": true, "category": "talking", "usage": "说话时右手手势", "enabled": true },
+    { "file": "nod.vrma", "name": "点头", "duration_seconds": 1.767, "loop": false, "category": "agree", "usage": "单次点头", "enabled": true },
+    { "file": "nod-3.vrma", "name": "点头同意", "duration_seconds": 3.1, "loop": false, "category": "agree", "usage": "较明显的点头", "enabled": true },
+    { "file": "shake.vrma", "name": "摇头", "duration_seconds": 3.633, "loop": false, "category": "deny", "usage": "单次摇头", "enabled": true },
+    { "file": "angry.vrma", "name": "不满摇头", "duration_seconds": 2.3, "loop": false, "category": "deny", "usage": "情绪较强的否定", "enabled": true },
+    { "file": "think.vrma", "name": "环顾思考", "duration_seconds": 3.367, "loop": false, "category": "think", "usage": "思考/回忆", "enabled": true },
+    { "file": "neutral.vrma", "name": "歪头", "duration_seconds": 5.067, "loop": false, "category": "listen", "usage": "倾听/疑惑", "enabled": true },
+    { "file": "happy.vrma", "name": "鼓掌", "duration_seconds": 5.3, "loop": false, "category": "celebrate", "usage": "开心祝贺", "enabled": true },
+    { "file": "happy-2.vrma", "name": "鼓掌变化", "duration_seconds": 3.767, "loop": false, "category": "celebrate", "usage": "开心祝贺（短版）", "enabled": true },
+    { "file": "sad.vrma", "name": "低头失落", "duration_seconds": 3.267, "loop": false, "category": "comfort", "usage": "共情安抚", "enabled": true },
+    { "file": "relaxed.vrma", "name": "伸展脖颈", "duration_seconds": 5.567, "loop": false, "category": "stretch", "usage": "伸展放松", "enabled": true },
+    { "file": "raise-hand.vrma", "name": "举手", "duration_seconds": 9.967, "loop": false, "category": "greeting", "usage": "招手/告别", "enabled": true },
+    { "file": "world-walk-back.vrma", "name": "后退行走", "duration_seconds": 1.233, "loop": false, "category": "movement", "usage": "需要位移，不适合站立陪伴场景", "enabled": false },
+    { "file": "world-sit-idle.vrma", "name": "坐姿待机", "duration_seconds": 13.333, "loop": true, "category": "sitting", "usage": "需要椅子与角色定位，本页面未做坐姿场景", "enabled": false },
+    { "file": "world-sit-talking.vrma", "name": "坐姿说话", "duration_seconds": 7.133, "loop": true, "category": "sitting", "usage": "需要椅子与角色定位，本页面未做坐姿场景", "enabled": false },
+    { "file": "world-sit-look.vrma", "name": "坐姿环顾", "duration_seconds": 10.767, "loop": true, "category": "sitting", "usage": "需要椅子与角色定位，本页面未做坐姿场景", "enabled": false }
+  ],
+  "unclassified": [
+    "VRMA_01.vrma", "VRMA_02.vrma", "VRMA_03.vrma", "VRMA_04.vrma", "VRMA_05.vrma", "VRMA_06.vrma", "VRMA_07.vrma",
+    "appearing-7KKFBBJ2.vrma", "appearing-JPRXVVPX.vrma",
+    "liked-5GYAGDE6.vrma", "liked-I5PMMZDS.vrma", "liked-JMZZ3B47.vrma", "liked-QPZJXMIS.vrma", "liked-WNQT4AV4.vrma", "liked-YXSECNSH.vrma", "liked-ZJX2BPZ2.vrma",
+    "waiting-3ESXHYFP.vrma", "waiting-4DOXHN5U.vrma", "waiting-4YZ6TYTJ.vrma", "waiting-E5W2OALG.vrma", "waiting-GVZZNZTH.vrma", "waiting-I3CZ3FBD.vrma", "waiting-OF6HT4CD.vrma",
+    "dance.vrma", "dance2.vrma", "AI猫ダンス.vrma", "ダンス28.vrma", "ハッピーシンセサイザ.vrma", "おじさん構文.vrma", "目撃！テト31世_A.vrma", "目撃！テト31世_B.vrma",
+    "CC0-run.vrma", "CC0-slowrun.vrma", "CC0-walk.vrma", "BattlePose/A.vrma", "BattlePose/B.vrma", "BattlePose/C.vrma", "BattlePose/D.vrma", "BattlePose/E.vrma",
+    "kaiten/kaiten5s.vrma", "kaiten/kaiten10s.vrma", "kaiten/kaiten15s.vrma"
+  ],
+  "unclassified_reason": "参考仓库中这些动画没有语义标注（舞蹈/等待/出场/战斗姿势/位移等），未逐一目视验证，暂不纳入模型可用动作集，避免语义错配。"
+}

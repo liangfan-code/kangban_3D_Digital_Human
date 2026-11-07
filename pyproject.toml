@@ -1,0 +1,57 @@
+[project]
+name = "kangban-3d-digital-human"
+version = "0.1.0"
+description = "康伴 3D 数字人康养陪伴系统 - Day1 项目骨架"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+    "pyjwt>=2.10",
+    "bcrypt>=4.2",
+    "tzdata>=2026.6",
+    "aiortc>=1.15.0",
+    "websockets>=17.4",
+    "sherpa-onnx>=2.0.1",
+    "numpy>=2.5.4",
+    "edge-tts>=7.3.1",
+]
+
+[project.optional-dependencies]
+# 基础设施扩展组：Day1 只声明依赖，不接入会话业务或定时外呼
+infra = [
+    "redis>=5.2",
+    "apscheduler>=3.10",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

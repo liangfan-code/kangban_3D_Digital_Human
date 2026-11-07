@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>康伴 · 3D 数字人验证台</title>
+  <style>
+    :root {
+      --primary: #236455;
+      --primary-light: #2d7a66;
+      --accent: #6db79a;
+      --bg: #eef4ef;
+      --card: #ffffff;
+      --text: #193a36;
+      --text-secondary: #607971;
+      --border: #dce5dd;
+      --radius: 18px;
+      --shadow: 0 8px 30px rgba(35, 100, 85, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: radial-gradient(circle at 20% 0%, #f7fbf8, var(--bg) 60%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .wrap { max-width: 1060px; margin: 0 auto; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .logo {
+      width: 44px; height: 44px; border-radius: 14px; color: #fff;
+      background: linear-gradient(135deg, var(--primary), var(--primary-light));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 20px; box-shadow: 0 6px 16px rgba(35, 100, 85, 0.25);
+    }
+    h1 { font-size: 20px; }
+    .sub { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr); gap: 18px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow: hidden;
+    }
+    .stage { position: relative; height: min(62vh, 560px); background:
+      radial-gradient(circle at 50% 76%, rgba(109, 183, 154, 0.32), transparent 62%),
+      linear-gradient(165deg, #e6f1ea, #f9fcfa 55%, #e7f2ec);
+    }
+    .stage canvas { display: block; width: 100%; height: 100%; }
+    .stage-meta {
+      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+      font-size: 12px; color: var(--text-secondary); border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.7);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 8px rgba(109, 183, 154, 0.8); }
+    .panel { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+    .panel h2 { font-size: 13px; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; }
+    button {
+      font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 999px;
+      border: 1px solid var(--border); background: #f7faf8; color: var(--text);
+      cursor: pointer; transition: all 0.18s ease;
+    }
+    button:hover { border-color: var(--accent); color: var(--primary); }
+    button.active { background: linear-gradient(135deg, var(--primary), var(--accent)); color: #fff; border-color: transparent; }
+    button.act { font-size: 12px; padding: 7px 12px; }
+    button.primary { background: linear-gradient(135deg, var(--primary), var(--primary-light)); color: #fff; border: none; }
+    select {
+      font: inherit; font-size: 13px; padding: 8px 12px; border-radius: 10px;
+      border: 1px solid var(--border); background: #f7faf8; color: var(--text);
+    }
+    .sublabel { font-size: 11px; color: var(--text-secondary); line-height: 1.6; }
+    .log {
+      height: 150px; overflow-y: auto; background: #0f2a24; color: #bff0dc;
+      border-radius: 12px; padding: 10px 12px; font: 12px/1.6 Consolas, monospace; white-space: pre-wrap;
+    }
+    .hint { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
+    code { background: #e6efe9; border-radius: 5px; padding: 1px 5px; }
+    @media (max-width: 820px) {
+      .grid { grid-template-columns: 1fr; }
+      .stage { height: min(46vh, 380px); }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.min.js",
+      "three/addons/": "/vendor/three/addons/",
+      "@pixiv/three-vrm": "/vendor/three-vrm/three-vrm.module.min.js",
+      "@pixiv/three-vrm-animation": "/vendor/three-vrm-animation/three-vrm-animation.module.min.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">伴</div>
+      <div>
+        <h1>3D 数字人验证台</h1>
+        <div class="sub">idle → 说话口型 → 动作 → 回 idle；全部本地资源，无 CDN</div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="stage" id="stage"></div>
+        <div class="stage-meta">
+          <span class="dot"></span>
+          <span id="stageStatus">初始化…</span>
+        </div>
+      </section>
+
+      <section class="card panel">
+        <div>
+          <h2>形象切换（来自 /avatars.json）</h2>
+          <div class="row">
+            <select id="avatarSelect"></select>
+            <button class="primary" id="switchBtn">切换形象</button>
+          </div>
+          <p class="sublabel" id="avatarHint">切换会销毁旧模型的贴图/几何/骨骼，重建动作绑定，口型与 idle/talking 循环保留。</p>
+        </div>
+
+        <div>
+          <h2>通话状态</h2>
+          <div class="row" id="stateRow">
+            <button class="active" data-state="idle">idle（未通话）</button>
+            <button data-state="calling">calling（拨号）</button>
+            <button data-state="in_call">in_call（通话）</button>
+            <button data-state="off">off（挂断复位）</button>
+          </div>
+        </div>
+
+        <div>
+          <h2>口型同步</h2>
+          <div class="row">
+            <button id="toneBtn">模拟远端说话（振荡器 MediaStream）</button>
+          </div>
+          <p class="sublabel">与真实通话同一条链路：MediaStream → AnalyserNode → VRM aa/ih 表情。</p>
+        </div>
+
+        <div>
+          <h2>动作（来自 /actions.json）</h2>
+          <div class="row" id="actionRow"></div>
+          <p class="sublabel" id="actionHint">点击按钮等同收到信令消息 kind=action。</p>
+        </div>
+
+        <div>
+          <h2>模拟信令注入</h2>
+          <div class="row">
+            <button class="primary" id="injectBtn">注入 [act:nod] 消息</button>
+            <button id="urlActBtn">按 URL ?act= 播放</button>
+          </div>
+          <p class="sublabel">控制台也可直接执行 <code>__kbAvatar.playAction('wave')</code>。</p>
+        </div>
+
+        <div>
+          <h2>事件日志</h2>
+          <div class="log" id="log"></div>
+        </div>
+
+        <p class="hint">
+          验证顺序：页面加载后模型应处于 idle 并随机眨眼 → 点击「模拟远端说话」看到口型开合与说话手势 →
+          点击动作按钮看到点头/挥手等 → 静音后约 0.5s 回到 idle。切到 calling/off 会强制复位。
+        </p>
+      </section>
+    </div>
+  </div>
+
+  <script type="module">
+    import { KangbanAvatar } from '/avatar/engine.js';
+
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('stageStatus');
+    const toneBtn = document.getElementById('toneBtn');
+    const avatarSelect = document.getElementById('avatarSelect');
+    const switchBtn = document.getElementById('switchBtn');
+    const avatarHint = document.getElementById('avatarHint');
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      logEl.textContent += `[${time}] ${message}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    let avatar = null;
+    let tone = null;
+
+    async function boot() {
+      try {
+        avatar = new KangbanAvatar({
+          host: document.getElementById('stage'),
+          onStatus(status) {
+            if (status.phase === 'ready') {
+              setStatus(status.message || '数字人已就绪 · 30fps 渲染');
+            } else if (status.phase === 'error') {
+              setStatus('错误：' + (status.message || '数字人加载失败'));
+            } else {
+              setStatus(status.message || '加载中…');
+            }
+          },
+        });
+        await avatar.init();
+        window.__kbAvatar = avatar;
+        log(`动作表已加载：${avatar.actions.size} 个动作`);
+        log(`形象注册表已加载：${avatar.listAvatars().length} 个，当前 ${avatar.getAvatar()}`);
+        logFacing();
+        buildAvatarSelect();
+
+        buildActionButtons();
+        const queryAction = new URLSearchParams(location.search).get('act');
+        if (queryAction) {
+          log(`URL 指定动作：${queryAction}`);
+          avatar.playAction(queryAction);
+        }
+      } catch (error) {
+        console.error(error);
+        setStatus('初始化失败：' + (error?.message || error));
+        log('初始化失败：' + (error?.message || error));
+      }
+    }
+
+    function buildAvatarSelect() {
+      const current = avatar.getAvatar();
+      const items = avatar.listAvatars();
+      avatarSelect.innerHTML = '';
+      for (const item of items) {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name === item.id ? item.id : `${item.name}（${item.id}）`;
+        if (item.description) option.title = item.description;
+        if (item.id === current) option.selected = true;
+        avatarSelect.appendChild(option);
+      }
+      avatarHint.textContent =
+        `当前形象：${current || '无'}；可选项 ${items.length} 个（来自 /avatars.json）`;
+    }
+
+    function logFacing() {
+      const info = avatar.describeAvatar();
+      if (!info?.facing) return;
+      const f = info.facing;
+      log(
+        `朝向 base=${f.base_deg}° offset=${f.offset_deg}° total=${f.total_deg}°` +
+          ` 正对相机=${f.at_default_orientation ? '是' : '否'}`,
+      );
+      log(`构图 模型尺寸=${info.size.join('×')} 相机位置=${info.camera.join(',')}`);
+    }
+
+    switchBtn.addEventListener('click', async () => {
+      const id = avatarSelect.value;
+      if (!id || !avatar) return;
+      const before = avatar.getMemoryStats();
+      log(
+        `开始切换形象 → ${id}；切换前 贴图=${before.textures} 几何=${before.geometries}`,
+      );
+      switchBtn.disabled = true;
+      const started = performance.now();
+      try {
+        const result = await avatar.setAvatar(id);
+        const wall = Math.round(performance.now() - started);
+        const after = avatar.getMemoryStats();
+        if (result.ok) {
+          log(
+            `切换成功 → ${result.id}；引擎耗时 ${result.switch_ms}ms，总耗时 ${wall}ms` +
+              (result.reused ? '（未重建）' : ''),
+          );
+          log(
+            `切换后 贴图=${after.textures} 几何=${after.geometries}` +
+              `（变化 ${after.textures - before.textures} / ${after.geometries - before.geometries}）`,
+          );
+          logFacing();
+          if (result.fallback) {
+            log(`注意：目标「${result.requested}」失败，已回落到 ${result.id}`);
+          }
+        } else {
+          log(`切换失败：${result.error}；当前形象仍为 ${avatar.getAvatar()}`);
+        }
+        buildAvatarSelect();
+        buildActionButtons();
+      } catch (error) {
+        log('切换异常：' + (error?.message || error));
+      } finally {
+        switchBtn.disabled = false;
+      }
+    });
+
+    function buildActionButtons() {
+      const row = document.getElementById('actionRow');
+      row.innerHTML = '';
+      for (const [actionId, def] of avatar.actions) {
+        const btn = document.createElement('button');
+        btn.className = 'act';
+        btn.textContent = `${def.label} (${actionId})`;
+        btn.title = def.usage || '';
+        btn.addEventListener('click', () => playViaSignal(actionId));
+        row.appendChild(btn);
+      }
+    }
+
+    /** 与 index.html 的 handleCallText 保持同一形状：kind=action */
+    function handleSignal(msg) {
+      if (msg.kind === 'action' && msg.action) {
+        log(`收到信令 action=${msg.action}${msg.param ? ' param=' + msg.param : ''}`);
+        avatar?.playAction(msg.action, msg.param);
+      }
+    }
+
+    function playViaSignal(actionId, param = null) {
+      handleSignal({ type: 'call_text', kind: 'action', action: actionId, param });
+    }
+
+    for (const btn of document.querySelectorAll('#stateRow button')) {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#stateRow button').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const state = btn.dataset.state;
+        avatar?.setState(state);
+        log(`状态切换 → ${state}`);
+      });
+    }
+
+    toneBtn.addEventListener('click', async () => {
+      if (tone) {
+        tone.stop();
+        tone = null;
+        avatar?.detachStream();
+        toneBtn.classList.remove('active');
+        log('已停止模拟说话');
+        return;
+      }
+      // 用真实 MediaStream 走与通话一致的 AnalyserNode 链路
+      const ctx = new AudioContext();
+      await ctx.resume();
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 180;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.16;
+      const mod = ctx.createOscillator();
+      mod.type = 'sine';
+      mod.frequency.value = 3.2; // 约 3 次/秒的「音节」起伏
+      const modDepth = ctx.createGain();
+      modDepth.gain.value = 0.13;
+      mod.connect(modDepth).connect(gain.gain);
+      const dest = ctx.createMediaStreamDestination();
+      osc.connect(gain).connect(dest);
+      osc.start();
+      mod.start();
+
+      avatar?.setState('in_call');
+      avatar?.attachStream(dest.stream);
+      tone = {
+        stop() {
+          try { osc.stop(); mod.stop(); } catch (_error) { /* ignore */ }
+          try { ctx.close(); } catch (_error) { /* ignore */ }
+        },
+      };
+      toneBtn.classList.add('active');
+      document.querySelector('#stateRow button[data-state="in_call"]')?.classList.add('active');
+      log('开始模拟远端说话：MediaStream → AnalyserNode');
+    });
+
+    document.getElementById('injectBtn').addEventListener('click', () => {
+      playViaSignal('nod', '2');
+    });
+
+    document.getElementById('urlActBtn').addEventListener('click', () => {
+      const action = new URLSearchParams(location.search).get('act');
+      if (action) playViaSignal(action);
+      else log('当前 URL 没有 ?act= 参数，示例：/avatar.html?act=wave');
+    });
+
+    boot();
+  </script>
+</body>
+</html>

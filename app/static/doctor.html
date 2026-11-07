@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 医生工作台</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <header class="topbar" id="kb-topbar"></header>
+
+  <main class="page">
+    <div class="page-head">
+      <h1 id="greet">您好</h1>
+      <span class="faint">关联长者的完整健康档案（含重大疾病）由您填写与维护；改动均留审计流水</span>
+    </div>
+
+    <div class="grid grid-3 stagger" id="elder-cards"></div>
+
+    <div class="grid grid-3 mt-24">
+      <div class="placeholder-card">
+        <span class="ph-icon">🩺</span>
+        <div>随访计划</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+      <div class="placeholder-card">
+        <span class="ph-icon">💊</span>
+        <div>用药方案管理</div>
+        <span class="ph-note">后续版本 · 高危副作用需人工确认（HITL）</span>
+      </div>
+      <div class="placeholder-card">
+        <span class="ph-icon">📤</span>
+        <div>摘要自动同步家属</div>
+        <span class="ph-note">家属端生成后即可见并回执已阅</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      var session = KB.requireRole(["doctor"]);
+      KB.renderTopbar();
+      document.getElementById("greet").textContent =
+        "您好，" + (session.displayName || session.username || "医生");
+
+      var box = document.getElementById("elder-cards");
+
+      var CATS = [
+        ["vital", "体征"], ["body_part", "身体部位"], ["medication", "当前用药"],
+        ["chronic", "慢性病"], ["major", "重大疾病"],
+      ];
+      var SEV = { normal: null, attention: ["tag-amber", "需关注"], warning: ["tag-lacquer", "预警"] };
+
+      function sevTag(s) {
+        var m = SEV[s];
+        return m ? "<span class='tag " + m[0] + "'>" + m[1] + "</span>" : "";
+      }
+      function statusTag(s) {
+        var map = { active: ["tag-moss", "在住"], paused: ["tag-amber", "暂停"], discharged: ["tag-lacquer", "已退住"] };
+        var m = map[s] || ["", s];
+        return "<span class='tag " + m[0] + "'>" + KB.esc(m[1]) + "</span>";
+      }
+      function fmtTime(s) {
+        if (!s) return "—";
+        var d = new Date(s);
+        if (isNaN(d)) return String(s).replace("T", " ").slice(0, 16);
+        return d.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false,
+          year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(/\//g, "-");
+      }
+      function catLabel(c) {
+        var hit = CATS.find(function (x) { return x[0] === c; });
+        return hit ? hit[1] : c;
+      }
+
+      function load() {
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/elders").then(function (rows) {
+          if (!rows || !rows.length) {
+            return KB.renderState(box, { kind: "empty", message: "暂无关联长者，请联系管理员建立医生-长者关联" });
+          }
+          box.innerHTML = rows.map(function (e) {
+            return "<div class='card' style='cursor:pointer;' data-id='" + e.elder_id + "'>" +
+              "<div class='card-title'><h3>" + KB.esc(e.name) + "</h3>" + statusTag(e.status) + "</div>" +
+              "<div class='muted'>性别：" + (e.gender === "female" ? "女" : e.gender === "male" ? "男" : "—") +
+              " · " + (e.bed_no ? "床位 " + e.bed_no : "床位未分配") + "</div>" +
+              "<div class='faint mt-8'>点击打开健康档案（查看 / 编辑 / 摘要 / 导出）</div></div>";
+          }).join("");
+          box.querySelectorAll("[data-id]").forEach(function (card) {
+            card.addEventListener("click", function () {
+              var e = rows.find(function (x) { return x.elder_id === card.dataset.id; });
+              openHealth(e);
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, load);
+        });
+      }
+
+      // ---------- 健康档案管理弹窗 ----------
+
+      function openHealth(e) {
+        KB.api("GET", "/api/v1/elders/" + e.elder_id + "/health").then(function (p) {
+          renderHealthModal(p);
+        }).catch(function (err) {
+          var tip = err.status === 403
+            ? "暂无该长者的健康档案授权，请联系管理员在「健康授权」中开通（编辑需含查看权限）。"
+            : KB.errText(err);
+          KB.toast(tip, "error");
+        });
+      }
+
+      function renderHealthModal(p) {
+        var sections = CATS.map(function (c) {
+          var rows = p.groups[c[0]] || [];
+          if (!rows.length) return "";
+          return "<h3 class='hp-head'>" + c[1] + "</h3><div>" +
+            rows.map(function (r) {
+              return "<div class='record-row'><div class='grow'>" +
+                "<b>" + KB.esc(r.item_key) + "</b>：" + KB.esc(r.value_text) + " " + sevTag(r.severity) +
+                "<div class='faint'>" + KB.esc(catLabel(r.category)) + " · 录入角色：" + KB.esc(r.recorded_role) +
+                " · 更新于 " + fmtTime(r.updated_at) + "</div></div>" +
+                "<button class='btn btn-ghost btn-sm' data-edit='" + r.record_id + "'>编辑</button></div>";
+            }).join("") + "</div>";
+        }).join("");
+        if (!sections) sections = "<p class='muted mt-16'>暂无健康记录，点击「新增记录」开始建档</p>";
+        var levelText = p.viewer_level === "confidential" ? "完整级（可读写全部）" : KB.esc(p.viewer_level || "未授权");
+
+        var m = KB.openModal(
+          "<h3>健康档案 · " + KB.esc(p.elder_name) + "</h3>" +
+          "<p class='faint'>房间：" + KB.esc(p.room_label || "未分配") +
+          "｜楼栋：" + KB.esc(p.building_code || "—") +
+          "｜在用设备：" + KB.esc(p.device_codes.join("、") || "无") +
+          " 　<span class='tag tag-clay'>" + levelText + "</span></p>" +
+          "<div>" + sections + "</div>" +
+          "<hr class='divider'>" +
+          "<div class='toolbar'>" +
+          "<button class='btn btn-primary' id='dr-add'>+ 新增记录</button>" +
+          "<button class='btn btn-ghost' id='dr-summary'>生成健康摘要</button>" +
+          "<button class='btn btn-ghost' id='dr-summaries'>查看摘要留档</button>" +
+          "<button class='btn btn-ghost' id='dr-export'>导出打印</button>" +
+          "</div>" +
+          "<div id='dr-extra'></div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' data-act='close'>关闭</button></div>"
+        );
+        m.modal.style.width = "min(720px, 100%)";
+        m.modal.querySelector("[data-act='close']").addEventListener("click", m.close);
+        var extra = m.modal.querySelector("#dr-extra");
+
+        function reload() {
+          KB.api("GET", "/api/v1/elders/" + p.elder_id + "/health").then(function (np) {
+            m.close();
+            renderHealthModal(np);
+          });
+        }
+
+        // 新增记录（全部类别，含重大疾病·隐私级）
+        m.modal.querySelector("#dr-add").addEventListener("click", function () {
+          recordForm(p, null, reload);
+        });
+
+        // 编辑记录（仅改 item_key / value_text / severity）
+        m.modal.querySelectorAll("[data-edit]").forEach(function (b) {
+          var rec = null;
+          CATS.forEach(function (c) {
+            (p.groups[c[0]] || []).forEach(function (r) {
+              if (r.record_id === b.dataset.edit) rec = r;
+            });
+          });
+          if (rec) b.addEventListener("click", function () { recordForm(p, rec, reload); });
+        });
+
+        // 生成健康摘要（版本自增留档；家属端可见并回执）
+        m.modal.querySelector("#dr-summary").addEventListener("click", function () {
+          var btn = this;
+          btn.disabled = true;
+          KB.api("POST", "/api/v1/elders/" + p.elder_id + "/health/summaries").then(function (s) {
+            KB.toast("已生成健康摘要 v" + s.version, "success");
+            extra.innerHTML = summaryBlock(s);
+          }).catch(function (err) {
+            extra.innerHTML = "<div class='warn-line mt-16'>⚠ <span>" + KB.esc(KB.errText(err)) + "</span></div>";
+          }).finally(function () { btn.disabled = false; });
+        });
+
+        // 摘要留档列表
+        m.modal.querySelector("#dr-summaries").addEventListener("click", function () {
+          KB.api("GET", "/api/v1/elders/" + p.elder_id + "/health/summaries").then(function (rows) {
+            if (!rows.length) {
+              extra.innerHTML = "<div class='state mt-16'><span class='big'>📄</span>暂无摘要留档，点击「生成健康摘要」创建</div>";
+              return;
+            }
+            extra.innerHTML = rows.map(summaryBlock).join("");
+          }).catch(function (err) {
+            extra.innerHTML = "<div class='warn-line mt-16'>⚠ <span>" + KB.esc(KB.errText(err)) + "</span></div>";
+          });
+        });
+
+        m.modal.querySelector("#dr-export").addEventListener("click", function () {
+          KB.openAuthorized("/api/v1/elders/" + p.elder_id + "/health/export");
+        });
+      }
+
+      function summaryBlock(s) {
+        var acked = !!s.acknowledged_by;
+        return "<div class='card mt-16'><div class='card-title'><h3>健康摘要 v" + s.version + "</h3>" +
+          "<span class='faint'>" + fmtTime(s.created_at) + "</span></div>" +
+          "<p class='ai-text'>" + KB.esc(s.summary_text) + "</p>" +
+          "<div class='mt-8 faint'>" + (acked
+            ? "家属已确认已阅（" + fmtTime(s.acknowledged_at) + "）"
+            : "家属尚未确认已阅") + "</div></div>";
+      }
+
+      // ---------- 记录表单（新增 / 编辑） ----------
+
+      function recordForm(p, rec, onSaved) {
+        var isEdit = !!rec;
+        var catOpts = CATS.map(function (c) {
+          return "<option value='" + c[0] + "'" + (rec && rec.category === c[0] ? " selected" : "") + ">" +
+            c[1] + (c[0] === "major" ? "（隐私级）" : "") + "</option>";
+        }).join("");
+        var m = KB.openModal(
+          "<h3>" + (isEdit ? "编辑记录 · " + KB.esc(rec.item_key) : "新增健康记录 · " + KB.esc(p.elder_name)) + "</h3>" +
+          (isEdit ? "" : "<div class='warn-line'>⚠ <span>「重大疾病」为隐私级信息，仅医生与管理员可读写；每次改动均写入审计流水。</span></div>") +
+          "<div class='form-error' data-err></div>" +
+          "<form>" +
+          (isEdit
+            ? "<div class='field'><label>类别</label><input value='" + KB.esc(catLabel(rec.category)) + "' readonly /></div>"
+            : "<div class='field'><label>类别<span class='req'>*</span></label><select name='category'>" + catOpts + "</select></div>") +
+          "<div class='field'><label>项目<span class='req'>*</span></label><input name='item_key' required value='" + KB.esc(rec ? rec.item_key : "") + "' placeholder='如 血压 / 冠心病' /></div>" +
+          "<div class='field'><label>结果描述<span class='req'>*</span></label><textarea name='value_text' required placeholder='检查所见、诊断结论、用药方案等'>" + KB.esc(rec ? rec.value_text : "") + "</textarea></div>" +
+          "<div class='field'><label>评估</label><select name='severity'>" +
+          ["normal", "attention", "warning"].map(function (s) {
+            var label = { normal: "正常", attention: "需关注", warning: "预警" }[s];
+            return "<option value='" + s + "'" + (rec && rec.severity === s ? " selected" : "") + ">" + label + "</option>";
+          }).join("") + "</select></div>" +
+          "<div class='modal-actions'>" +
+          "<button type='button' class='btn btn-ghost' data-act='cancel'>取消</button>" +
+          "<button type='submit' class='btn btn-primary'>" + (isEdit ? "保存修改" : "创建") + "</button>" +
+          "</div></form>"
+        );
+        m.modal.querySelector("[data-act='cancel']").addEventListener("click", m.close);
+        m.modal.querySelector("form").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var errBox = m.modal.querySelector("[data-err]");
+          errBox.classList.remove("show");
+          var req = isEdit
+            ? KB.api("PUT", "/api/v1/health/" + rec.record_id, {
+                item_key: this.elements.item_key.value.trim(),
+                value_text: this.elements.value_text.value.trim(),
+                severity: this.elements.severity.value,
+              })
+            : KB.api("POST", "/api/v1/elders/" + p.elder_id + "/health", {
+                category: this.elements.category.value,
+                item_key: this.elements.item_key.value.trim(),
+                value_text: this.elements.value_text.value.trim(),
+                severity: this.elements.severity.value,
+              });
+          var btn = m.modal.querySelector("button[type=submit]");
+          btn.disabled = true;
+          req.then(function () {
+            m.close();
+            KB.toast(isEdit ? "记录已更新（已留审计流水）" : "记录已创建", "success");
+            if (onSaved) onSaved();
+          }).catch(function (e) {
+            errBox.innerHTML = "⚠ " + KB.esc(KB.errText(e));
+            errBox.classList.add("show");
+            btn.disabled = false;
+          });
+        });
+      }
+
+      load();
+    })();
+  </script>
+</body>
+</html>

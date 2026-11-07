@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 语音测试台（Day4）</title>
+  <link rel="stylesheet" href="/css/main.css" />
+  <style>
+    /* 适老大字号状态条（Day3 规划 D3 决策：独立语音测试页） */
+    .voice-status {
+      font-size: 28px; font-weight: 700; text-align: center;
+      padding: 20px 16px; border: 3px solid #ccc; border-radius: 14px;
+      margin: 16px 0; background: #fff; min-height: 76px;
+    }
+    .voice-status.ok    { border-color: #2e7d32; color: #2e7d32; }
+    .voice-status.warn  { border-color: #ef6c00; color: #b26a00; }
+    .voice-status.err   { border-color: #c62828; color: #c62828; }
+    .voice-score { font-size: 18px; color: #666; text-align: center; min-height: 24px; }
+    .voice-log {
+      font-size: 18px; line-height: 1.6; background: #fafafa; border: 1px solid #e0e0e0;
+      border-radius: 10px; padding: 14px; min-height: 120px; max-height: 320px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    .voice-log .t { color: #2e7d32; }
+    .voice-log .r { color: #1565c0; }
+    .voice-log .e { color: #c62828; }
+    .btn-voice { font-size: 22px; padding: 14px 30px; border-radius: 12px; }
+    .voice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+    /* 3D 引擎按 canvas 自身 clientWidth 计算 buffer：必须钉死 CSS 尺寸，
+       否则 canvas 按属性尺寸显示 → 每帧 ×pixelRatio 指数膨胀（老师页 .stage canvas 同款） */
+    #avatarHomeSlot canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">康伴</span><span class="sub">语音测试台（Day3）</span></div>
+    <div class="whoami">
+      <span class="health-badge" id="conn-badge"><span class="dot"></span>未连接</span>
+    </div>
+  </header>
+
+  <main style="max-width: 860px; margin: 24px auto; padding: 0 16px;">
+    <!-- 设备登录区 -->
+    <section class="card" id="login-card">
+      <h2 style="margin-top:0;">1️⃣ 设备登录</h2>
+      <p style="color:#666;">粘贴<b>设备 Token</b>（eyJhbGci 开头，管理端签发；人 JWT 在此会被 403 拒绝）。</p>
+      <div style="display:flex; gap:8px;">
+        <input id="device-token" type="password" placeholder="设备 Token"
+               style="flex:1; font-size:16px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
+        <button class="btn btn-primary btn-voice" id="btn-login">连接语音</button>
+      </div>
+    </section>
+
+    <!-- 3D 数字人（Day4）：boot.js 检测到 avatarHomeSlot 自动渲染，页面打开即加载
+         （宿主必须可见，否则 canvas 尺寸为 0 → 1×1 空白画布）；
+         加载失败只显示状态文字，不影响语音链路（降级底线） -->
+    <section class="card" id="avatar-card">
+      <h2 style="margin-top:0;">🧑‍🦳 3D 数字人</h2>
+      <div id="avatarHomeSlot"
+           style="width:100%; aspect-ratio: 4 / 3; border-radius:12px; overflow:hidden; background:#f2f6ff;"></div>
+      <div id="avatarHomeStatus" style="color:#999; font-size:14px; text-align:center; margin-top:6px;">数字人加载中…</div>
+      <!-- 一键切换形象：boot.js 就绪后自动渲染按钮组（选择存 localStorage，通话中可切换） -->
+      <div id="kbAvatarSwitcher"></div>
+    </section>
+
+    <!-- 语音交互区 -->
+    <section class="card" id="voice-card" style="display:none;">
+      <h2 style="margin-top:0;">2️⃣ 语音闭环</h2>
+      <div class="voice-status" id="status">等待连接…</div>
+      <div class="voice-score" id="score"></div>
+      <div style="text-align:center; margin: 12px 0;">
+        <button class="btn btn-primary btn-voice" id="btn-voice">🎤 开始对话</button>
+        <button class="btn btn-ghost btn-voice" id="btn-stop">停止</button>
+        <button class="btn btn-ghost btn-voice" id="btn-enroll">🗝️ 录入声纹</button>
+      </div>
+      <div class="voice-grid">
+        <div>
+          <div style="font-weight:600; margin-bottom:6px;">听到的话（转写）</div>
+          <div class="voice-log" id="log-asr">—</div>
+        </div>
+        <div>
+          <div style="font-weight:600; margin-bottom:6px;">数字人回复</div>
+          <div class="voice-log" id="log-reply">—</div>
+        </div>
+      </div>
+      <div id="confirm-box" style="display:none; margin-top:12px; padding:14px; border:2px solid #ef6c00; border-radius:10px;">
+        <div style="font-size:20px; font-weight:700; color:#b26a00;">声纹多次未通过，请确认身份：</div>
+        <div id="confirm-candidates" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;"></div>
+      </div>
+      <details style="margin-top:12px; color:#555; font-size:14px;">
+        <summary style="cursor:pointer;">🔐 管理员通道录入（双人间设备必须走此通道，单人间用上面按钮即可）</summary>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+          <input id="admin-token" type="password" placeholder="管理员 JWT（POST /api/v1/auth/login 的 access_token）"
+                 style="flex:3; min-width:240px; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:8px;" />
+          <input id="admin-elder" placeholder="长者 elder_id（UUID，GET /api/v1/elders 可查）"
+                 style="flex:2; min-width:200px; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:8px;" />
+          <button class="btn btn-ghost" id="btn-enroll-admin">🗝️ 管理员录入</button>
+        </div>
+        <p style="color:#999; margin:6px 0 0;">双人间规则：设备无法自行决定声纹归属，须管理员指定长者，防止声纹挂错人（ADR-005）。</p>
+      </details>
+    </section>
+
+    <!-- 降级文字通道 -->
+    <section class="card" id="fallback-card" style="display:none; border-color:#ef6c00;">
+      <h2 style="margin-top:0; color:#b26a00;">⚠️ 语音服务暂不可用</h2>
+      <p id="fallback-reason" style="color:#666;"></p>
+      <div style="display:flex; gap:8px;">
+        <input id="text-input" placeholder="文字输入（Day5 接入对话后生效，当前为演示回显）"
+               style="flex:1; font-size:18px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
+        <button class="btn btn-ghost" id="btn-text-send">发送</button>
+      </div>
+      <div class="voice-log" id="log-text" style="margin-top:8px;">—</div>
+    </section>
+
+    <p style="color:#999; font-size:14px; margin-top:16px;">
+      提示：音频经 WebRTC 通道上传（需先连接语音）；转写与朗读延迟会记入日志用于 POC 统计。
+    </p>
+  </main>
+
+  <script src="/js/voice.js"></script>
+  <!-- engine.js 使用裸模块名（three / @pixiv/three-vrm），需 importmap 映射到本地 vendor
+       （与老师 avatar.html 同款；缺失会报 Failed to resolve module specifier "three"） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.min.js",
+      "three/addons/": "/vendor/three/addons/",
+      "@pixiv/three-vrm": "/vendor/three-vrm/three-vrm.module.min.js",
+      "@pixiv/three-vrm-animation": "/vendor/three-vrm-animation/three-vrm-animation.module.min.js"
+    }
+  }
+  </script>
+  <script type="module" src="/avatar/boot.js"></script>
+</body>
+</html>

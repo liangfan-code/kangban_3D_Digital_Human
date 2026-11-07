@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 我的伙伴</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">康伴</span><span class="sub">我的数字人伙伴</span></div>
+    <div class="whoami">
+      <span class="health-badge" id="health-badge"><span class="dot"></span>检测中…</span>
+      <button class="btn btn-ghost btn-sm" id="kb-logout">退出</button>
+    </div>
+  </header>
+
+  <main class="elder-page">
+    <div id="elder-view" class="stagger" style="text-align:center;padding-top:5vh;">
+      <div class="skeleton" style="text-align:left;"><div class="bar w60"></div><div class="bar"></div><div class="bar w40"></div></div>
+    </div>
+
+    <!-- 占位：Day3+ 能力，只留接口位说明 -->
+    <div class="grid grid-3 mt-24" style="margin-top:48px;">
+      <div class="placeholder-card" id="avatar-card" style="cursor:pointer;">
+        <span class="ph-icon" id="avatar-ph">🧑‍🦳</span>
+        <div>3D 数字人形象</div>
+        <span class="ph-note" id="avatar-note">点击加载 · 失败不影响其他功能</span>
+      </div>
+      <a class="placeholder-card" href="/voice.html" style="text-decoration:none;color:inherit;">
+        <span class="ph-icon">🎙️</span>
+        <div>语音对话</div>
+        <span class="ph-note">Day3 测试台入口</span>
+      </a>
+      <div class="placeholder-card">
+        <span class="ph-icon">🔊</span>
+        <div>声纹校验</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+    </div>
+
+    <p class="elder-foot">紧急情况请按床头呼叫器，本设备不替代呼叫器</p>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <!-- importmap 必须在任何模块加载前静态声明（engine.js 裸模块名 three/@pixiv/three-vrm） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.min.js",
+      "three/addons/": "/vendor/three/addons/",
+      "@pixiv/three-vrm": "/vendor/three-vrm/three-vrm.module.min.js",
+      "@pixiv/three-vrm-animation": "/vendor/three-vrm-animation/three-vrm-animation.module.min.js"
+    }
+  }
+  </script>
+  <style>
+    /* 钉死 canvas CSS 尺寸：engine 按 canvas clientWidth 算 buffer，不钉会指数膨胀 */
+    #avatarHomeSlot canvas { display: block; width: 100%; height: 100%; }
+  </style>
+  <script>
+    (function () {
+      "use strict";
+      if (!sessionStorage.getItem("kb_token")) {
+        window.location.replace("/index.html");
+        return;
+      }
+      KB.bindHealthBadge(document.getElementById("health-badge"));
+      document.getElementById("kb-logout").addEventListener("click", KB.logout);
+
+      var view = document.getElementById("elder-view");
+
+      KB.api("GET", "/api/v1/devices/me").then(function (me) {
+        var roomText = me.building_code + " 栋 " + me.room_number + " 房";
+        var html;
+
+        if (me.mode === "single" && me.elder) {
+          // 单人间：全屏长者卡片
+          html =
+            "<div class='elder-meta' style='justify-content:center;'>" +
+            "<span class='tag tag-clay'>" + KB.esc(roomText) + "</span>" +
+            "<span class='tag'>单人间</span></div>" +
+            "<div class='elder-hello' style='margin-top:26px;'>" + KB.esc(me.elder.name) + "</div>" +
+            "<div class='elder-greet'>我是您的数字人伙伴，很高兴今天也陪着您。</div>";
+        } else if (me.candidates && me.candidates.length) {
+          // 双人间：大卡候选选择（仅本地展示，绑定仍由管理端完成）
+          html =
+            "<div class='elder-meta' style='justify-content:center;'>" +
+            "<span class='tag tag-clay'>" + KB.esc(roomText) + "</span>" +
+            "<span class='tag'>双人间</span></div>" +
+            "<div class='elder-greet' style='margin-top:26px;'>请问现在使用平板的是哪一位？</div>" +
+            "<div class='grid' style='grid-template-columns:repeat(" + Math.min(me.candidates.length, 2) + ",1fr);margin-top:22px;'>" +
+            me.candidates.map(function (c) {
+              return "<button class='candidate-card' data-name='" + KB.esc(c.name) + "'>" + KB.esc(c.name) +
+                "<div class='faint' style='font-family:var(--font-body);font-size:16px;'>床位 " + c.bed_no + "</div></button>";
+            }).join("") +
+            "</div><div id='chosen-view'></div>";
+        } else {
+          html =
+            "<div class='elder-meta' style='justify-content:center;'>" +
+            "<span class='tag tag-clay'>" + KB.esc(roomText) + "</span></div>" +
+            "<div class='elder-hello' style='margin-top:26px;'>欢迎</div>" +
+            "<div class='elder-greet'>请联系工作人员完成设备与长者的绑定。</div>";
+        }
+
+        view.innerHTML = html;
+
+        // 双人间候选：选择后本地展示问候（不发起任何写操作）
+        view.querySelectorAll(".candidate-card").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            view.querySelectorAll(".candidate-card").forEach(function (b) { b.classList.remove("chosen"); });
+            btn.classList.add("chosen");
+            var name = btn.dataset.name;
+            document.getElementById("chosen-view").innerHTML =
+              "<div class='elder-greet' style='margin-top:22px;'>" + KB.esc(name) +
+              "，我是您的数字人伙伴，很高兴今天也陪着您。</div>";
+          });
+        });
+      }).catch(function (e) {
+        view.innerHTML =
+          "<div class='state error'><span class='big'>⚠️</span>" + KB.esc(KB.errText(e)) +
+          "<div class='elder-greet' style='margin-top:14px;'>请联系工作人员重新激活设备。</div>" +
+          "<div class='retry'><button class='btn btn-ghost' onclick='location.reload()'>重试</button></div></div>";
+      });
+
+      // ---------- Day4：3D 数字人卡片（降级底线：点击才加载，失败只改文案） ----------
+      var avatarCard = document.getElementById("avatar-card");
+      if (avatarCard) {
+        avatarCard.addEventListener("click", function () {
+          if (avatarCard.dataset.booted) return;
+          avatarCard.dataset.booted = "1";
+          var note = document.getElementById("avatar-note");
+          note.textContent = "加载中…（首次约数秒）";
+          var slot = document.createElement("div");
+          slot.id = "avatarHomeSlot";
+          slot.style.cssText = "width:100%;aspect-ratio:4/3;border-radius:12px;overflow:hidden;background:#f2f6ff;";
+          avatarCard.prepend(slot);
+          document.getElementById("avatar-ph").style.display = "none";
+          var status = document.createElement("div");
+          status.id = "avatarHomeStatus";
+          status.style.cssText = "color:#999;font-size:14px;text-align:center;margin-top:6px;";
+          avatarCard.appendChild(status);
+          // 一键切换形象：boot.js 就绪后自动渲染按钮组（选择存 localStorage）
+          var switcher = document.createElement("div");
+          switcher.id = "kbAvatarSwitcher";
+          avatarCard.appendChild(switcher);
+          var s = document.createElement("script");
+          s.type = "module";
+          s.src = "/avatar/boot.js";
+          s.onerror = function () { note.textContent = "3D 数字人暂不可用（不影响其他功能）"; };
+          document.body.appendChild(s);
+          // boot 引擎会把阶段文案写进 #avatarHomeStatus，同步到卡片角注
+          new MutationObserver(function () {
+            var t = status.textContent || "";
+            if (t.indexOf("就绪") !== -1) { note.textContent = "已加载 · " + t.replace(/^3D 数字人/, "").trim(); }
+            else if (t.indexOf("失败") !== -1 || t.indexOf("不可用") !== -1) { note.textContent = "3D 数字人暂不可用（不影响其他功能）"; }
+          }).observe(status, { childList: true, subtree: true, characterData: true });
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 管理台</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <header class="topbar" id="kb-topbar"></header>
+
+  <main class="page">
+    <div class="page-head">
+      <h1>管理台</h1>
+      <span class="faint">所有管理操作仅限管理员，后端二次鉴权</span>
+    </div>
+
+    <nav class="tabs" id="kb-tabs">
+      <button class="tab active" data-tab="rooms">房间</button>
+      <button class="tab" data-tab="personas">人设</button>
+      <button class="tab" data-tab="devices">设备</button>
+      <button class="tab" data-tab="accounts">账号</button>
+      <button class="tab" data-tab="elders">长者</button>
+      <button class="tab" data-tab="assignments">关联</button>
+      <button class="tab" data-tab="healthgrants">健康授权</button>
+    </nav>
+
+    <!-- 房间 -->
+    <section class="tab-panel active" id="panel-rooms">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="room-create">+ 新建房间</button>
+        <span class="spacer"></span>
+        <span class="faint">软删口径：停用置 inactive，有在住长者或活跃设备时后端拒绝</span>
+      </div>
+      <div id="rooms-list" class="stagger"></div>
+    </section>
+
+    <!-- 人设 -->
+    <section class="tab-panel" id="panel-personas">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="persona-create">+ 新建人设</button>
+        <span class="spacer"></span>
+        <span class="faint">停用置 is_active=false，已绑定长者的后续版本处理</span>
+      </div>
+      <div id="personas-list" class="stagger"></div>
+    </section>
+
+    <!-- 设备 -->
+    <section class="tab-panel" id="panel-devices">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="device-create">+ 新建设备</button>
+        <span class="spacer"></span>
+        <span class="faint">退役将同时吊销该设备全部 Token</span>
+      </div>
+      <div id="devices-list" class="stagger"></div>
+    </section>
+
+    <!-- 账号 -->
+    <section class="tab-panel" id="panel-accounts">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="account-create">+ 新建账号</button>
+        <select id="account-role-filter" class="field" style="min-height:48px;width:auto;border:1px solid var(--line);border-radius:10px;padding:0 12px;background:var(--card);color:var(--ink);">
+          <option value="">全部角色</option>
+          <option value="admin">管理员</option>
+          <option value="nurse">护工</option>
+          <option value="doctor">医生</option>
+          <option value="family">家属</option>
+        </select>
+      </div>
+      <div id="accounts-list" class="stagger"></div>
+    </section>
+
+    <!-- 长者 -->
+    <section class="tab-panel" id="panel-elders">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="elder-create">+ 新建长者档案</button>
+        <span class="spacer"></span>
+        <span class="faint">退住置 discharged 并释放床位</span>
+      </div>
+      <div id="elders-list" class="stagger"></div>
+    </section>
+
+    <!-- 关联 -->
+    <section class="tab-panel" id="panel-assignments">
+      <div class="grid grid-3">
+        <div>
+          <div class="flex-between"><h3>护工 · 楼栋</h3><button class="btn btn-ghost btn-sm" data-assign-create="building">+ 新建</button></div>
+          <div id="assign-buildings-list" class="mt-8"></div>
+        </div>
+        <div>
+          <div class="flex-between"><h3>医生 · 长者</h3><button class="btn btn-ghost btn-sm" data-assign-create="doctor">+ 新建</button></div>
+          <div id="assign-doctors-list" class="mt-8"></div>
+        </div>
+        <div>
+          <div class="flex-between"><h3>家属 · 长者</h3><button class="btn btn-ghost btn-sm" data-assign-create="family">+ 新建</button></div>
+          <div id="assign-families-list" class="mt-8"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 健康授权 -->
+    <section class="tab-panel" id="panel-healthgrants">
+      <div class="toolbar">
+        <button class="btn btn-primary" id="grant-create">+ 新建/更新授权</button>
+        <span class="spacer"></span>
+        <span class="faint">授予编辑权限必须同时授予对应查看权限；吊销为软吊销，可再次授权复活。护工/医生/家属均需在此授权后方可读写健康档案。</span>
+      </div>
+      <div id="grants-list" class="stagger"></div>
+      <hr class="divider">
+      <div class="flex-between">
+        <h3>健康数据审计流水</h3>
+        <div class="toolbar" style="margin-bottom:0;">
+          <select id="audit-elder" class="field" style="min-height:40px;width:auto;border:1px solid var(--line);border-radius:10px;padding:0 12px;background:var(--card);color:var(--ink);">
+            <option value="">全部长者</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" id="audit-refresh">查询</button>
+        </div>
+      </div>
+      <div id="audit-list" class="mt-8"></div>
+    </section>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      KB.requireRole(["admin"]);
+      KB.renderTopbar();
+      KB.initTabs(document.getElementById("kb-tabs"), function (tab) {
+        var loaders = {
+          rooms: loadRooms, personas: loadPersonas, devices: loadDevices,
+          accounts: loadAccounts, elders: loadElders, assignments: loadAssignments,
+          healthgrants: loadHealthGrants,
+        };
+        if (loaders[tab]) loaders[tab]();
+      });
+      // initTabs 只绑点击、不触发初始 Tab 的回调，首屏需主动加载「房间」，
+      // 否则刚登录时房间面板空白（点其他页签再点回来才会加载）
+      loadRooms();
+
+      // 缓存（页面内）：房间/人设/账号/长者，供下拉与名称映射
+      var cache = { rooms: [], personas: [], accounts: [], elders: [] };
+
+      function roomLabel(r) { return r.building_code + "-" + r.floor + "F-" + r.room_number + "（" + r.bed_count + "人间）"; }
+      function roomById(id) { return cache.rooms.find(function (r) { return r.room_id === id; }); }
+      function personaById(id) { return cache.personas.find(function (p) { return p.persona_id === id; }); }
+      function accountById(id) { return cache.accounts.find(function (a) { return a.account_id === id; }); }
+      function elderById(id) { return cache.elders.find(function (e) { return e.elder_id === id; }); }
+      function statusTag(s) {
+        var map = {
+          active: ["tag-moss", "正常"], inactive: ["tag-amber", "已停用"],
+          pending: ["tag-amber", "待激活"], disabled: ["tag-amber", "已禁用"],
+          retired: ["tag-lacquer", "已退役"], paused: ["tag-amber", "暂停"],
+          discharged: ["tag-lacquer", "已退住"],
+        };
+        var m = map[s] || ["", s];
+        return "<span class='tag " + m[0] + "'>" + KB.esc(m[1]) + "</span>";
+      }
+      function fmtDate(s) {
+        if (!s) return "—";
+        var d = new Date(s);
+        if (isNaN(d)) return String(s).replace("T", " ").slice(0, 16);
+        return d.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false,
+          year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(/\//g, "-");
+      }
+
+      /** 通用表单弹窗：fields 为 HTML 字符串；onSubmit(form) 返回 Promise。 */
+      function formModal(title, fieldsHtml, submitLabel, onSubmit) {
+        var m = KB.openModal(
+          "<h3>" + KB.esc(title) + "</h3>" +
+          "<div class='form-error' data-err></div>" +
+          "<form>" + fieldsHtml +
+          "<div class='modal-actions'>" +
+          "<button type='button' class='btn btn-ghost' data-act='cancel'>取消</button>" +
+          "<button type='submit' class='btn btn-primary'>" + KB.esc(submitLabel || "保存") + "</button>" +
+          "</div></form>"
+        );
+        m.modal.querySelector("[data-act='cancel']").addEventListener("click", m.close);
+        m.modal.querySelector("form").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var errBox = m.modal.querySelector("[data-err]");
+          errBox.classList.remove("show");
+          var btn = m.modal.querySelector("button[type=submit]");
+          btn.disabled = true;
+          onSubmit(this).catch(function (e) {
+            errBox.innerHTML = "⚠ " + KB.esc(KB.errText(e));
+            errBox.classList.add("show");
+          }).finally(function () { btn.disabled = false; });
+        });
+        return m;
+      }
+
+      function field(label, inputHtml, required, hint) {
+        return "<div class='field'><label>" + KB.esc(label) + (required ? "<span class='req'>*</span>" : "") + "</label>" +
+          inputHtml + (hint ? "<div class='hint'>" + KB.esc(hint) + "</div>" : "") + "</div>";
+      }
+      function textField(name, label, opts) {
+        opts = opts || {};
+        return field(label,
+          "<input name='" + name + "' value='" + KB.esc(opts.value == null ? "" : opts.value) + "'" +
+          (opts.type ? " type='" + opts.type + "'" : " type='text'") +
+          (opts.required ? " required" : "") +
+          (opts.disabled ? " disabled" : "") +
+          (opts.placeholder ? " placeholder='" + KB.esc(opts.placeholder) + "'" : "") + " />",
+          opts.required, opts.hint);
+      }
+      function selectField(name, label, options, selectedValue, required, hint) {
+        var opts = options.map(function (o) {
+          return "<option value='" + KB.esc(o.value) + "'" + (o.value === selectedValue ? " selected" : "") + ">" + KB.esc(o.label) + "</option>";
+        }).join("");
+        return field(label, "<select name='" + name + "'>" + opts + "</select>", required, hint);
+      }
+
+      function loadSelectData() {
+        return Promise.all([
+          KB.api("GET", "/api/v1/admin/rooms"),
+          KB.api("GET", "/api/v1/admin/personas"),
+          KB.api("GET", "/api/v1/admin/accounts"),
+          KB.api("GET", "/api/v1/elders"),
+        ]).then(function (rs) {
+          cache.rooms = rs[0] || [];
+          cache.personas = rs[1] || [];
+          cache.accounts = rs[2] || [];
+          cache.elders = rs[3] || [];
+        });
+      }
+
+      // ================= 房间 =================
+
+      function loadRooms() {
+        var box = document.getElementById("rooms-list");
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/admin/rooms").then(function (rows) {
+          cache.rooms = rows || [];
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "还没有房间，点击「新建房间」开始" });
+          var tbody = rows.map(function (r) {
+            return "<tr><td class='mono'>" + KB.esc(r.room_id.slice(0, 8)) + "</td>" +
+              "<td>" + KB.esc(r.building_code) + "</td><td>" + r.floor + "</td>" +
+              "<td>" + KB.esc(r.room_number) + "</td><td>" + r.bed_count + "</td>" +
+              "<td>" + statusTag(r.status) + "</td>" +
+              "<td class='actions'>" +
+              "<button class='btn btn-ghost btn-sm' data-edit='" + r.room_id + "'>编辑</button>" +
+              (r.status === "active" ? "<button class='btn btn-danger-ghost btn-sm' data-del='" + r.room_id + "'>停用</button>" : "") +
+              "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>ID</th><th>楼栋</th><th>楼层</th><th>房号</th><th>床数</th><th>状态</th><th>操作</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-edit]").forEach(function (b) {
+            b.addEventListener("click", function () { roomForm(roomById(b.dataset.edit)); });
+          });
+          box.querySelectorAll("[data-del]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var r = roomById(b.dataset.del);
+              KB.confirmModal("停用房间", "确认停用 " + roomLabel(r) + " ？停用后不可被新绑定引用（可再启用）。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("DELETE", "/api/v1/admin/rooms/" + r.room_id)
+                    .then(function () { KB.toast("房间已停用", "success"); loadRooms(); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadRooms);
+        });
+      }
+
+      function roomForm(room) {
+        var isEdit = !!room;
+        formModal(isEdit ? "编辑房间 · " + roomLabel(room) : "新建房间",
+          textField("building_code", "楼栋编号", { value: room && room.building_code, required: true, placeholder: "如 ACC1" }) +
+          textField("floor", "楼层", { value: room && room.floor, type: "number", required: true }) +
+          textField("room_number", "房号", { value: room && room.room_number, required: true }) +
+          selectField("bed_count", "床数",
+            [{ value: "1", label: "单人间" }, { value: "2", label: "双人间" }],
+            room ? String(room.bed_count) : "1", true) +
+          (isEdit ? selectField("status", "状态",
+            [{ value: "active", label: "启用" }, { value: "inactive", label: "停用" }],
+            room.status, true, "有在住长者或活跃设备的房间停用会被后端拒绝") : ""),
+          isEdit ? "保存" : "创建",
+          function (form) {
+            var body = {
+              building_code: form.elements.building_code.value.trim(),
+              floor: parseInt(form.elements.floor.value, 10),
+              room_number: form.elements.room_number.value.trim(),
+              bed_count: parseInt(form.elements.bed_count.value, 10),
+            };
+            var p = isEdit
+              ? KB.api("PUT", "/api/v1/admin/rooms/" + room.room_id,
+                  Object.assign(body, { status: form.elements.status.value }))
+              : KB.api("POST", "/api/v1/admin/rooms", body);
+            return p.then(function () {
+              KB.toast(isEdit ? "房间已更新" : "房间已创建", "success");
+              loadRooms();
+            });
+          });
+      }
+      document.getElementById("room-create").addEventListener("click", function () { roomForm(null); });
+
+      // ================= 人设 =================
+
+      function loadPersonas() {
+        var box = document.getElementById("personas-list");
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/admin/personas").then(function (rows) {
+          cache.personas = rows || [];
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "还没有数字人人设，点击「新建人设」开始" });
+          var tbody = rows.map(function (p) {
+            return "<tr><td class='mono'>" + KB.esc(p.code) + "</td><td>" + KB.esc(p.name) + "</td>" +
+              "<td class='muted'>" + KB.esc(p.greeting || "—") + "</td>" +
+              "<td>" + (p.is_active ? statusTag("active") : statusTag("inactive")) + "</td>" +
+              "<td class='actions'>" +
+              "<button class='btn btn-ghost btn-sm' data-edit='" + p.persona_id + "'>编辑</button>" +
+              (p.is_active ? "<button class='btn btn-danger-ghost btn-sm' data-del='" + p.persona_id + "'>停用</button>" : "") +
+              "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>编码</th><th>名称</th><th>问候语</th><th>状态</th><th>操作</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-edit]").forEach(function (b) {
+            b.addEventListener("click", function () { personaForm(personaById(b.dataset.edit)); });
+          });
+          box.querySelectorAll("[data-del]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var p = personaById(b.dataset.del);
+              KB.confirmModal("停用人设", "确认停用人设「" + p.name + "」？停用后不可再被新长者选用。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("DELETE", "/api/v1/admin/personas/" + p.persona_id)
+                    .then(function () { KB.toast("人设已停用", "success"); loadPersonas(); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadPersonas);
+        });
+      }
+
+      function personaForm(persona) {
+        var isEdit = !!persona;
+        formModal(isEdit ? "编辑人设 · " + persona.name : "新建人设",
+          textField("code", "编码", { value: persona && persona.code, disabled: isEdit, hint: isEdit ? "编码创建后不可修改" : "唯一，如 grandma_mei" }) +
+          textField("name", "名称", { value: persona && persona.name, required: true, placeholder: "如 梅阿姨" }) +
+          textField("greeting", "问候语", { value: persona && persona.greeting, hint: "数字人开口第一句话" }) +
+          textField("personality", "性格描述", { value: persona && persona.personality }) +
+          textField("voice_id", "音色 ID（后续版本启用）", { value: persona && persona.voice_id }) +
+          (isEdit ? selectField("is_active", "状态", [{ value: "true", label: "启用" }, { value: "false", label: "停用" }],
+            String(persona.is_active), true) : ""),
+          isEdit ? "保存" : "创建",
+          function (form) {
+            var p = isEdit
+              ? KB.api("PUT", "/api/v1/admin/personas/" + persona.persona_id, {
+                  name: form.elements.name.value.trim(),
+                  greeting: form.elements.greeting.value.trim() || null,
+                  personality: form.elements.personality.value.trim() || null,
+                  voice_id: form.elements.voice_id.value.trim() || null,
+                  is_active: form.elements.is_active.value === "true",
+                })
+              : KB.api("POST", "/api/v1/admin/personas", {
+                  code: form.elements.code.value.trim(),
+                  name: form.elements.name.value.trim(),
+                  greeting: form.elements.greeting.value.trim() || null,
+                  personality: form.elements.personality.value.trim() || null,
+                  voice_id: form.elements.voice_id.value.trim() || null,
+                });
+            return p.then(function () {
+              KB.toast(isEdit ? "人设已更新" : "人设已创建", "success");
+              loadPersonas();
+            });
+          });
+      }
+      document.getElementById("persona-create").addEventListener("click", function () { personaForm(null); });
+
+      // ================= 设备 =================
+
+      function loadDevices() {
+        var box = document.getElementById("devices-list");
+        KB.renderState(box, { kind: "loading" });
+        Promise.all([
+          KB.api("GET", "/api/v1/admin/devices"),
+          loadSelectData(),
+        ]).then(function (rs) {
+          var rows = rs[0] || [];
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "还没有设备，点击「新建设备」开始" });
+          var tbody = rows.map(function (d) {
+            var room = d.room_id ? roomById(d.room_id) : null;
+            return "<tr><td class='mono'>" + KB.esc(d.device_code) + "</td>" +
+              "<td>" + (room ? KB.esc(roomLabel(room)) + (d.bed_no ? " · 床" + d.bed_no : "") : "<span class='faint'>未绑定</span>") + "</td>" +
+              "<td>" + statusTag(d.status) + "</td>" +
+              "<td class='actions'>" +
+              "<button class='btn btn-ghost btn-sm' data-bind='" + d.device_id + "'>" + (d.room_id ? "换绑" : "绑定") + "</button>" +
+              (d.status !== "retired" ? "<button class='btn btn-ghost btn-sm' data-tokens='" + d.device_id + "'>凭证面板</button>" : "") +
+              (d.status !== "retired" ? "<button class='btn btn-danger-ghost btn-sm' data-retire='" + d.device_id + "'>退役</button>" : "") +
+              "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>设备编号</th><th>绑定位置</th><th>状态</th><th>操作</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-bind]").forEach(function (b) {
+            b.addEventListener("click", function () { deviceBindForm(rows.find(function (d) { return d.device_id === b.dataset.bind; })); });
+          });
+          box.querySelectorAll("[data-tokens]").forEach(function (b) {
+            b.addEventListener("click", function () { tokenPanel(rows.find(function (d) { return d.device_id === b.dataset.tokens; })); });
+          });
+          box.querySelectorAll("[data-retire]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var d = rows.find(function (x) { return x.device_id === b.dataset.retire; });
+              KB.confirmModal("退役设备",
+                "确认退役 " + d.device_code + " ？将同时吊销该设备全部 Token，平板将立即失去连接。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("DELETE", "/api/v1/admin/devices/" + d.device_id)
+                    .then(function () { KB.toast("设备已退役", "success"); loadDevices(); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadDevices);
+        });
+      }
+
+      function activeRoomOptions() {
+        return cache.rooms.filter(function (r) { return r.status === "active"; })
+          .map(function (r) { return { value: r.room_id, label: roomLabel(r) }; });
+      }
+
+      function deviceCreateForm() {
+        formModal("新建设备",
+          textField("device_code", "设备编号", { required: true, placeholder: "如 ACC1-TAB-001" }) +
+          selectField("room_id", "绑定房间", activeRoomOptions(), "", true) +
+          selectField("bed_no", "床位", [{ value: "", label: "房间级（不指定床位）" }, { value: "1", label: "1 床" }, { value: "2", label: "2 床" }], ""),
+          "创建",
+          function (form) {
+            var body = {
+              device_code: form.elements.device_code.value.trim(),
+              room_id: form.elements.room_id.value,
+            };
+            if (form.elements.bed_no.value) body.bed_no = parseInt(form.elements.bed_no.value, 10);
+            return KB.api("POST", "/api/v1/admin/devices", body).then(function () {
+              KB.toast("设备已创建（初始待激活）", "success");
+              loadDevices();
+            });
+          });
+      }
+      document.getElementById("device-create").addEventListener("click", deviceCreateForm);
+
+      function deviceBindForm(device) {
+        formModal((device.room_id ? "换绑" : "绑定") + "设备 · " + device.device_code,
+          selectField("room_id", "房间", activeRoomOptions(), device.room_id || "", true) +
+          selectField("bed_no", "床位", [{ value: "", label: "房间级（不指定床位）" }, { value: "1", label: "1 床" }, { value: "2", label: "2 床" }],
+            device.bed_no ? String(device.bed_no) : ""),
+          "保存绑定",
+          function (form) {
+            var body = { room_id: form.elements.room_id.value };
+            if (form.elements.bed_no.value) body.bed_no = parseInt(form.elements.bed_no.value, 10);
+            return KB.api("PUT", "/api/v1/devices/" + device.device_id + "/binding", body).then(function () {
+              KB.toast("绑定已更新", "success");
+              loadDevices();
+            });
+          });
+      }
+
+      /** 设备凭证面板：列表 / 签发注册凭证 / 单条吊销 / 一键吊销 */
+      function tokenPanel(device) {
+        var m = KB.openModal(
+          "<h3>凭证面板 · " + KB.esc(device.device_code) + "</h3>" +
+          "<div id='tk-list' class='mt-8'></div>" +
+          "<div class='modal-actions' style='justify-content:space-between;'>" +
+          "<button class='btn btn-ghost' id='tk-issue'>签发注册凭证</button>" +
+          "<button class='btn btn-danger-ghost' id='tk-revoke-all'>吊销全部有效凭证</button>" +
+          "</div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' id='tk-close'>关闭</button></div>"
+        );
+        m.modal.querySelector("#tk-close").addEventListener("click", m.close);
+        m.modal.querySelector("#tk-issue").addEventListener("click", function () {
+          KB.confirmModal("签发注册凭证", "将为 " + device.device_code + " 签发一枚 24 小时有效的一次性注册凭证，明文仅显示一次。继续？")
+            .then(function (ok) {
+              if (!ok) return;
+              KB.api("POST", "/api/v1/admin/devices/" + device.device_id + "/registration-tokens")
+                .then(function (data) {
+                  KB.secretModal("一次性注册凭证（24 小时有效）", data.registration_token,
+                    "发给现场工作人员，在平板「首次使用」入口换取设备 Token。关闭后不可再见。");
+                  refreshTokens();
+                })
+                .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+            });
+        });
+        m.modal.querySelector("#tk-revoke-all").addEventListener("click", function () {
+          KB.confirmModal("吊销全部凭证", "确认吊销 " + device.device_code + " 的全部有效凭证？设备将立即失联。", true)
+            .then(function (ok) {
+              if (!ok) return;
+              KB.api("POST", "/api/v1/admin/devices/" + device.device_id + "/tokens/revoke-all")
+                .then(function (r) { KB.toast("已吊销 " + r.revoked_count + " 条凭证", "success"); refreshTokens(); loadDevices(); })
+                .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+            });
+        });
+        function refreshTokens() {
+          var box = m.modal.querySelector("#tk-list");
+          KB.renderState(box, { kind: "loading" });
+          KB.api("GET", "/api/v1/admin/devices/" + device.device_id + "/tokens").then(function (rows) {
+            if (!rows.length) return KB.renderState(box, { kind: "empty", message: "该设备还没有任何凭证" });
+            var tbody = rows.map(function (t) {
+              var alive = !t.revoked_at;
+              return "<tr><td class='mono'>" + KB.esc(t.token_kind) + "</td>" +
+                "<td>" + fmtDate(t.issued_at) + "</td><td>" + fmtDate(t.expires_at) + "</td>" +
+                "<td>" + (alive ? statusTag("active") : "<span class='tag tag-lacquer'>已吊销</span>") + "</td>" +
+                "<td>" + (alive ? "<button class='btn btn-danger-ghost btn-sm' data-revoke='" + t.token_id + "'>吊销</button>" : "") + "</td></tr>";
+            }).join("");
+            box.innerHTML = "<div class='table-wrap'><table class='kb' style='min-width:520px;'><thead><tr>" +
+              "<th>类型</th><th>签发</th><th>过期</th><th>状态</th><th></th>" +
+              "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+            box.querySelectorAll("[data-revoke]").forEach(function (b) {
+              b.addEventListener("click", function () {
+                KB.api("DELETE", "/api/v1/admin/devices/" + device.device_id + "/tokens/" + b.dataset.revoke)
+                  .then(function () { KB.toast("凭证已吊销", "success"); refreshTokens(); })
+                  .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+              });
+            });
+          }).catch(function (e) {
+            KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, refreshTokens);
+          });
+        }
+        refreshTokens();
+      }
+
+      // ================= 账号 =================
+
+      var ROLE_LABEL = { admin: "管理员", nurse: "护工", doctor: "医生", family: "家属" };
+
+      function loadAccounts() {
+        var box = document.getElementById("accounts-list");
+        var roleFilter = document.getElementById("account-role-filter").value;
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/admin/accounts" + (roleFilter ? "?role=" + roleFilter : "")).then(function (rows) {
+          cache.accounts = rows || [];
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "没有符合条件的账号" });
+          var tbody = rows.map(function (a) {
+            return "<tr><td class='mono'>" + KB.esc(a.username) + "</td><td>" + KB.esc(a.display_name) + "</td>" +
+              "<td>" + KB.esc(ROLE_LABEL[a.role] || a.role) + "</td>" +
+              "<td>" + (a.status === "active" ? statusTag("active") : statusTag("inactive")) + "</td>" +
+              "<td>" + fmtDate(a.created_at) + "</td>" +
+              "<td class='actions'>" +
+              "<button class='btn btn-ghost btn-sm' data-edit='" + a.account_id + "'>编辑</button>" +
+              "<button class='btn btn-ghost btn-sm' data-reset='" + a.account_id + "'>重置密码</button>" +
+              (a.status === "active"
+                ? "<button class='btn btn-danger-ghost btn-sm' data-disable='" + a.account_id + "'>停用</button>"
+                : "<button class='btn btn-ghost btn-sm' data-enable='" + a.account_id + "'>启用</button>") +
+              "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>用户名</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-edit]").forEach(function (b) {
+            b.addEventListener("click", function () { accountForm(accountById(b.dataset.edit)); });
+          });
+          box.querySelectorAll("[data-reset]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var a = accountById(b.dataset.reset);
+              KB.confirmModal("重置密码", "确认为「" + a.display_name + "（" + a.username + "）」重置密码？将生成随机密码且仅显示一次。")
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("POST", "/api/v1/admin/accounts/" + a.account_id + "/reset-password")
+                    .then(function (r) { KB.secretModal("新密码", r.new_password, "请当面交付本人并提醒尽快使用；关闭后不可再见。"); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+          box.querySelectorAll("[data-disable]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var a = accountById(b.dataset.disable);
+              KB.confirmModal("停用账号", "确认停用「" + a.display_name + "（" + a.username + "）」？其登录凭证立即失效。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("POST", "/api/v1/admin/accounts/" + a.account_id + "/disable")
+                    .then(function () { KB.toast("账号已停用", "success"); loadAccounts(); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+          box.querySelectorAll("[data-enable]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              KB.api("POST", "/api/v1/admin/accounts/" + b.dataset.enable + "/enable")
+                .then(function () { KB.toast("账号已启用", "success"); loadAccounts(); })
+                .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadAccounts);
+        });
+      }
+      document.getElementById("account-role-filter").addEventListener("change", loadAccounts);
+
+      function accountForm(account) {
+        var isEdit = !!account;
+        formModal(isEdit ? "编辑账号 · " + account.username : "新建账号",
+          (isEdit ? "" : textField("username", "用户名", { required: true, hint: "3-64 位，字母数字_.-" })) +
+          textField("display_name", "姓名", { value: account && account.display_name, required: true }) +
+          selectField("role", "角色",
+            Object.keys(ROLE_LABEL).map(function (k) { return { value: k, label: ROLE_LABEL[k] }; }),
+            account ? account.role : "nurse", true) +
+          textField("phone", "联系电话", { value: account && account.phone }) +
+          (isEdit ? "" : field("初始密码", "<input name='password' type='password' required minlength='8' />", true, "至少 8 位；建议当面交付")),
+          isEdit ? "保存" : "创建",
+          function (form) {
+            var p = isEdit
+              ? KB.api("PUT", "/api/v1/admin/accounts/" + account.account_id, {
+                  display_name: form.elements.display_name.value.trim(),
+                  role: form.elements.role.value,
+                  phone: form.elements.phone.value.trim() || null,
+                })
+              : KB.api("POST", "/api/v1/admin/accounts", {
+                  username: form.elements.username.value.trim(),
+                  display_name: form.elements.display_name.value.trim(),
+                  role: form.elements.role.value,
+                  phone: form.elements.phone.value.trim() || null,
+                  password: form.elements.password.value,
+                });
+            return p.then(function () {
+              KB.toast(isEdit ? "账号已更新" : "账号已创建", "success");
+              loadAccounts();
+            });
+          });
+      }
+      document.getElementById("account-create").addEventListener("click", function () { accountForm(null); });
+
+      // ================= 长者 =================
+
+      function loadElders() {
+        var box = document.getElementById("elders-list");
+        KB.renderState(box, { kind: "loading" });
+        Promise.all([KB.api("GET", "/api/v1/elders"), loadSelectData()]).then(function (rs) {
+          var rows = rs[0] || [];
+          cache.elders = rows;
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "还没有长者档案，点击「新建长者档案」开始" });
+          var tbody = rows.map(function (el) {
+            var room = el.room_id ? roomById(el.room_id) : null;
+            var persona = personaById(el.persona_id);
+            return "<tr><td>" + KB.esc(el.name) + "</td>" +
+              "<td>" + (room ? KB.esc(roomLabel(room)) + " · 床" + (el.bed_no || "—") : "<span class='faint'>未分配</span>") + "</td>" +
+              "<td>" + KB.esc(persona ? persona.name : "—") + "</td>" +
+              "<td>" + statusTag(el.status) + "</td>" +
+              "<td class='actions'>" +
+              "<button class='btn btn-ghost btn-sm' data-detail='" + el.elder_id + "'>详情</button>" +
+              "<button class='btn btn-ghost btn-sm' data-edit='" + el.elder_id + "'>编辑</button>" +
+              (el.status !== "discharged" ? "<button class='btn btn-danger-ghost btn-sm' data-del='" + el.elder_id + "'>退住</button>" : "") +
+              "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>姓名</th><th>房间床位</th><th>人设</th><th>状态</th><th>操作</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-detail]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var el = elderById(b.dataset.detail);
+              var room = el.room_id ? roomById(el.room_id) : null;
+              var persona = personaById(el.persona_id);
+              KB.showDrawer("长者档案 · " + el.name, [
+                ["elder_id", el.elder_id],
+                ["状态", el.status],
+                ["性别", el.gender || "—"],
+                ["出生日期", el.birth_date || "—"],
+                ["房间", room ? roomLabel(room) : "未分配"],
+                ["床位", el.bed_no || "—"],
+                ["人设", persona ? persona.name + "（" + persona.code + "）" : "—"],
+                ["建档时间", fmtDate(el.created_at)],
+                ["更新时间", fmtDate(el.updated_at)],
+              ]);
+            });
+          });
+          box.querySelectorAll("[data-edit]").forEach(function (b) {
+            b.addEventListener("click", function () { elderForm(elderById(b.dataset.edit)); });
+          });
+          box.querySelectorAll("[data-del]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var el = elderById(b.dataset.del);
+              KB.confirmModal("办理退住",
+                "确认给「" + el.name + "」办理退住？档案将置为已退住，房间床位立即释放（不物理删除）。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("DELETE", "/api/v1/elders/" + el.elder_id)
+                    .then(function () { KB.toast("已办理退住，床位已释放", "success"); loadElders(); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadElders);
+        });
+      }
+
+      function personaOptions() {
+        return cache.personas.filter(function (p) { return p.is_active; })
+          .map(function (p) { return { value: p.persona_id, label: p.name + "（" + p.code + "）" }; });
+      }
+
+      function elderForm(elder) {
+        var isEdit = !!elder;
+        formModal(isEdit ? "编辑长者 · " + elder.name : "新建长者档案",
+          textField("name", "姓名", { value: elder && elder.name, required: true }) +
+          selectField("gender", "性别", [{ value: "", label: "不填写" }, { value: "female", label: "女" }, { value: "male", label: "男" }],
+            (elder && elder.gender) || "") +
+          textField("birth_date", "出生日期", { value: elder && elder.birth_date, type: "date" }) +
+          selectField("persona_id", "人设", personaOptions(), elder && elder.persona_id, true) +
+          selectField("room_id", "房间（可选）", [{ value: "", label: "暂不分配" }].concat(activeRoomOptions()), (elder && elder.room_id) || "") +
+          selectField("bed_no", "床位", [{ value: "", label: "—" }, { value: "1", label: "1 床" }, { value: "2", label: "2 床" }],
+            elder && elder.bed_no ? String(elder.bed_no) : "", false, "选择房间后必须选择床位"),
+          isEdit ? "保存" : "创建",
+          function (form) {
+            var body = { name: form.elements.name.value.trim() };
+            if (form.elements.gender.value) body.gender = form.elements.gender.value;
+            if (form.elements.birth_date.value) body.birth_date = form.elements.birth_date.value;
+            body.persona_id = form.elements.persona_id.value;
+            var roomId = form.elements.room_id.value;
+            var bedNo = form.elements.bed_no.value;
+            if (roomId) {
+              body.room_id = roomId;
+              if (!bedNo) return Promise.reject(new Error("分配房间时必须选择床位"));
+              body.bed_no = parseInt(bedNo, 10);
+            }
+            var p = isEdit
+              ? KB.api("PUT", "/api/v1/elders/" + elder.elder_id, body)
+              : KB.api("POST", "/api/v1/elders", body);
+            return p.then(function () {
+              KB.toast(isEdit ? "长者档案已更新" : "长者档案已创建", "success");
+              loadElders();
+            });
+          });
+      }
+      document.getElementById("elder-create").addEventListener("click", function () { elderForm(null); });
+
+      // ================= 关联（三张表） =================
+
+      var ASSIGN_CONF = {
+        building: {
+          listUrl: "/api/v1/admin/assignments/buildings",
+          createUrl: "/api/v1/admin/assignments/buildings",
+          deleteUrl: "/api/v1/admin/assignments/buildings/",
+          accountRoles: ["nurse"],
+          columns: ["护工", "楼栋", "状态", ""],
+          rowRender: function (r) { return [accountName(r.account_id), r.building_code, statusHtml(r.status), r.assignment_id]; },
+        },
+        doctor: {
+          listUrl: "/api/v1/admin/assignments/doctors",
+          createUrl: "/api/v1/admin/assignments/doctors",
+          deleteUrl: "/api/v1/admin/assignments/doctors/",
+          accountRoles: ["doctor"],
+          columns: ["医生", "长者", "有效期至", ""],
+          rowRender: function (r) { return [accountName(r.account_id), elderName(r.elder_id), r.valid_until ? fmtDate(r.valid_until) : "长期", r.assignment_id]; },
+        },
+        family: {
+          listUrl: "/api/v1/admin/assignments/families",
+          createUrl: "/api/v1/admin/assignments/families",
+          deleteUrl: "/api/v1/admin/assignments/families/",
+          accountRoles: ["family"],
+          columns: ["家属", "长者", "关系", ""],
+          rowRender: function (r) { return [accountName(r.account_id), elderName(r.elder_id), r.relation ? KB.esc(r.relation) : "<span class='faint'>—</span>", r.assignment_id]; },
+        },
+      };
+
+      function accountName(id) { var a = accountById(id); return a ? a.display_name + "（" + a.username + "）" : id.slice(0, 8); }
+      function elderName(id) { var e = elderById(id); return e ? e.name : id.slice(0, 8); }
+      function statusHtml(s) { return s === "active" ? statusTag("active") : "<span class='tag tag-lacquer'>已吊销</span>"; }
+
+      function loadAssignments() {
+        return loadSelectData().then(function () {
+          Object.keys(ASSIGN_CONF).forEach(function (kind) { loadAssignList(kind); });
+        }).catch(function (e) { KB.toast(KB.errText(e), "error"); });
+      }
+
+      function loadAssignList(kind) {
+        var conf = ASSIGN_CONF[kind];
+        // family 复数为 families（此前 "family"+"ies" 拼出 familyies，容器取 null 导致报错+排版塌陷）
+        var boxId = "assign-" + (kind === "family" ? "families" : kind + "s") + "-list";
+        var box = document.getElementById(boxId);
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", conf.listUrl).then(function (rows) {
+          if (!rows.length) return KB.renderState(box, { kind: "empty", message: "暂无关联" });
+          var tbody = rows.map(function (r) {
+            var cells = conf.rowRender(r);
+            // cells[0]/[1] 为纯文本需转义；cells[2] 由 rowRender 自行保证（文本已内嵌转义，状态列是可信标签 HTML）
+            return "<tr><td>" + KB.esc(cells[0]) + "</td><td>" + KB.esc(cells[1]) + "</td><td>" + cells[2] + "</td>" +
+              "<td>" + (r.status === "active" ? "<button class='btn btn-danger-ghost btn-sm' data-suspend='" + cells[3] + "'>吊销</button>" : "") + "</td></tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb' style='min-width:420px;'><thead><tr>" +
+            conf.columns.map(function (c) { return "<th>" + KB.esc(c) + "</th>"; }).join("") +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+          box.querySelectorAll("[data-suspend]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              KB.confirmModal("吊销关联", "确认吊销该关联？吊销即时生效（软吊销，保留追溯）。", true)
+                .then(function (ok) {
+                  if (!ok) return;
+                  KB.api("DELETE", conf.deleteUrl + b.dataset.suspend)
+                    .then(function () { KB.toast("关联已吊销", "success"); loadAssignList(kind); })
+                    .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+                });
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, function () { loadAssignList(kind); });
+        });
+      }
+
+      document.querySelectorAll("[data-assign-create]").forEach(function (btn) {
+        btn.addEventListener("click", function () { assignForm(btn.dataset.assignCreate); });
+      });
+
+      function assignForm(kind) {
+        var conf = ASSIGN_CONF[kind];
+        var accountOpts = cache.accounts.filter(function (a) { return conf.accountRoles.indexOf(a.role) !== -1 && a.status === "active"; })
+          .map(function (a) { return { value: a.account_id, label: a.display_name + "（" + a.username + "）" }; });
+        if (!accountOpts.length) { KB.toast("没有可用账号，请先到「账号」页创建", "error"); return; }
+        var elderOpts = cache.elders.filter(function (e) { return e.status === "active"; })
+          .map(function (e) { return { value: e.elder_id, label: e.name }; });
+        var title = { building: "新建护工-楼栋关联", doctor: "新建医生-长者关联", family: "新建家属-长者关联" }[kind];
+        var extra = kind === "building"
+          ? textField("building_code", "楼栋编号", { required: true, placeholder: "如 ACC1" })
+          : (kind === "family"
+            ? textField("relation", "关系（可选）", { placeholder: "如 女儿" })
+            : "") +
+          (kind !== "building"
+            ? field("有效期至（可选，留空为长期）", "<input name='valid_until' type='datetime-local' />")
+            : "");
+        formModal(title,
+          selectField("account_id", "账号", accountOpts, "", true) +
+          (kind === "building" ? "" : selectField("elder_id", "长者", elderOpts, "", true)) +
+          extra,
+          "创建关联",
+          function (form) {
+            var body = { account_id: form.elements.account_id.value };
+            if (kind === "building") body.building_code = form.elements.building_code.value.trim();
+            else {
+              body.elder_id = form.elements.elder_id.value;
+              if (kind === "family" && form.elements.relation.value.trim()) body.relation = form.elements.relation.value.trim();
+              if (form.elements.valid_until && form.elements.valid_until.value) body.valid_until = new Date(form.elements.valid_until.value).toISOString();
+            }
+            return KB.api("POST", conf.createUrl, body).then(function () {
+              KB.toast("关联已创建", "success");
+              loadAssignList(kind);
+            });
+          });
+      }
+
+      // ================= 健康授权（ACL 矩阵） =================
+
+      var GRANT_KEYS = [
+        ["can_view_basic", "查看基础健康"],
+        ["can_edit_basic", "编辑基础健康"],
+        ["can_view_confidential", "查看隐私健康"],
+        ["can_edit_confidential", "编辑隐私健康"],
+      ];
+
+      function loadHealthGrants() {
+        var box = document.getElementById("grants-list");
+        KB.renderState(box, { kind: "loading" });
+        loadSelectData().then(function () {
+          return KB.api("GET", "/api/v1/admin/health-grants");
+        }).then(function (rows) {
+          renderGrants(rows || []);
+          renderAuditElderOptions();
+          loadAudit();
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadHealthGrants);
+        });
+      }
+
+      function renderGrants(rows) {
+        var box = document.getElementById("grants-list");
+        if (!rows.length) {
+          return KB.renderState(box, { kind: "empty", message: "还没有健康授权，点击「新建/更新授权」为护工/医生/家属开通" });
+        }
+        var tbody = rows.map(function (g) {
+          var checks = GRANT_KEYS.map(function (k) {
+            return g[k[0]] ? "<span class='tag tag-moss'>" + k[1] + "</span>" : "";
+          }).filter(Boolean).join(" ") || "<span class='faint'>无权限</span>";
+          return "<tr><td>" + KB.esc(accountName(g.account_id)) + "</td>" +
+            "<td>" + KB.esc(elderName(g.elder_id)) + "</td>" +
+            "<td>" + checks + "</td>" +
+            "<td>" + statusHtml(g.status) + "</td>" +
+            "<td class='actions'>" +
+            "<button class='btn btn-ghost btn-sm' data-edit='" + g.grant_id + "'>编辑</button>" +
+            (g.status === "active" ? "<button class='btn btn-danger-ghost btn-sm' data-del='" + g.grant_id + "'>吊销</button>" : "") +
+            "</td></tr>";
+        }).join("");
+        box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+          "<th>账号</th><th>长者</th><th>权限</th><th>状态</th><th>操作</th>" +
+          "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+        box.querySelectorAll("[data-edit]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            var g = rows.find(function (x) { return x.grant_id === b.dataset.edit; });
+            grantForm(g);
+          });
+        });
+        box.querySelectorAll("[data-del]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            var g = rows.find(function (x) { return x.grant_id === b.dataset.del; });
+            KB.confirmModal("吊销健康授权",
+              "确认吊销 " + accountName(g.account_id) + " 对 " + elderName(g.elder_id) + " 的健康档案授权？即时生效（软吊销，可再授权复活）。", true)
+              .then(function (ok) {
+                if (!ok) return;
+                KB.api("DELETE", "/api/v1/admin/health-grants/" + g.grant_id)
+                  .then(function () { KB.toast("授权已吊销", "success"); loadHealthGrants(); })
+                  .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+              });
+          });
+        });
+      }
+
+      function checkField(name, label, checked, hint) {
+        return "<label><input type='checkbox' name='" + name + "'" + (checked ? " checked" : "") + " />" +
+          "<span>" + KB.esc(label) + (hint ? "<span class='faint'>　" + KB.esc(hint) + "</span>" : "") + "</span></label>";
+      }
+
+      function grantForm(grant) {
+        var isEdit = !!grant;
+        var accountOpts = cache.accounts
+          .filter(function (a) { return a.role !== "admin" && a.status === "active"; })
+          .map(function (a) { return { value: a.account_id, label: a.display_name + "（" + ROLE_LABEL[a.role] + " · " + a.username + "）" }; });
+        if (!accountOpts.length) { KB.toast("没有可授权的账号（护工/医生/家属），请先到「账号」页创建", "error"); return; }
+        var elderOpts = cache.elders.map(function (e) { return { value: e.elder_id, label: e.name }; });
+        if (!elderOpts.length) { KB.toast("没有长者档案，请先到「长者」页创建", "error"); return; }
+        formModal(isEdit ? "编辑健康授权" : "新建健康授权",
+          (isEdit
+            ? field("账号", "<input value='" + KB.esc(accountName(grant.account_id)) + "' readonly />") +
+              field("长者", "<input value='" + KB.esc(elderName(grant.elder_id)) + "' readonly />")
+            : selectField("account_id", "账号", accountOpts, "", true) +
+              selectField("elder_id", "长者", elderOpts, "", true)) +
+          "<div class='field'><label>权限（编辑自动隐含查看）</label><div class='check-grid'>" +
+          GRANT_KEYS.map(function (k) {
+            return checkField(k[0], k[1], grant ? grant[k[0]] : false,
+              k[0].indexOf("confidential") !== -1 ? "含重大疾病" : "体征/用药/慢性病等");
+          }).join("") +
+          "</div></div>",
+          isEdit ? "保存" : "授权",
+          function (form) {
+            var body = {
+              can_view_basic: form.elements.can_view_basic.checked,
+              can_edit_basic: form.elements.can_edit_basic.checked,
+              can_view_confidential: form.elements.can_view_confidential.checked,
+              can_edit_confidential: form.elements.can_edit_confidential.checked,
+            };
+            // 前端预校验：编辑必须含查看（后端同样 422 兜底）
+            if (body.can_edit_basic && !body.can_view_basic) {
+              return Promise.reject(new Error("「编辑基础健康」必须同时勾选「查看基础健康」"));
+            }
+            if (body.can_edit_confidential && !body.can_view_confidential) {
+              return Promise.reject(new Error("「编辑隐私健康」必须同时勾选「查看隐私健康」"));
+            }
+            var p;
+            if (isEdit) {
+              p = KB.api("PUT", "/api/v1/admin/health-grants/" + grant.grant_id, body);
+            } else {
+              body.account_id = form.elements.account_id.value;
+              body.elder_id = form.elements.elder_id.value;
+              p = KB.api("POST", "/api/v1/admin/health-grants", body);
+            }
+            return p.then(function () {
+              KB.toast(isEdit ? "授权已更新" : "授权已开通（同账号同长者自动覆盖）", "success");
+              loadHealthGrants();
+            });
+          });
+      }
+      document.getElementById("grant-create").addEventListener("click", function () {
+        loadSelectData().then(function () { grantForm(null); })
+          .catch(function (e) { KB.toast(KB.errText(e), "error"); });
+      });
+
+      // ================= 健康审计流水 =================
+
+      var ACTION_LABEL = { create: "新增", update: "修改", delete: "删除" };
+
+      function renderAuditElderOptions() {
+        var sel = document.getElementById("audit-elder");
+        var current = sel.value;
+        sel.innerHTML = "<option value=''>全部长者</option>" +
+          cache.elders.map(function (e) {
+            return "<option value='" + e.elder_id + "'>" + KB.esc(e.name) + "</option>";
+          }).join("");
+        if (current) sel.value = current;
+      }
+
+      var SEV_LABEL = { normal: "正常", attention: "需关注", warning: "预警" };
+
+      function valBrief(v) {
+        if (!v) return "—";
+        var s = (v.item_key ? v.item_key + "：" : "") + (v.value_text || "");
+        if (v.severity && SEV_LABEL[v.severity] && v.severity !== "normal") {
+          s += "【" + SEV_LABEL[v.severity] + "】";
+        }
+        return s || "—";
+      }
+
+      function loadAudit() {
+        var box = document.getElementById("audit-list");
+        KB.renderState(box, { kind: "loading" });
+        var eid = document.getElementById("audit-elder").value;
+        var url = "/api/v1/admin/health-audit?limit=100" + (eid ? "&elder_id=" + eid : "");
+        KB.api("GET", url).then(function (rows) {
+          if (!rows.length) {
+            return KB.renderState(box, { kind: "empty", message: "暂无审计流水" });
+          }
+          var tbody = rows.map(function (r) {
+            return "<tr><td>" + fmtDate(r.created_at) + "</td>" +
+              "<td>" + KB.esc(ACTION_LABEL[r.action] || r.action) + "</td>" +
+              "<td>" + KB.esc(elderName(r.elder_id)) + "</td>" +
+              "<td class='mono'>" + KB.esc(String(r.record_id).slice(0, 8)) + "</td>" +
+              "<td>" + KB.esc(accountName(r.operator_id)) + "</td>" +
+              "<td>" + KB.esc(valBrief(r.old_value)) + "</td>" +
+              "<td>" + KB.esc(valBrief(r.new_value)) + "</td>" +
+              "</tr>";
+          }).join("");
+          box.innerHTML = "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>时间</th><th>操作</th><th>长者</th><th>记录</th><th>操作人</th><th>旧值</th><th>新值</th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadAudit);
+        });
+      }
+      document.getElementById("audit-refresh").addEventListener("click", loadAudit);
+    })();
+  </script>
+</body>
+</html>

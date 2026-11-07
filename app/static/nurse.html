@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 护工工作台</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <header class="topbar" id="kb-topbar"></header>
+
+  <main class="page">
+    <div class="page-head">
+      <h1 id="greet">您好</h1>
+      <span class="faint">列表由后端按您所辖楼栋自动收敛；健康信息按管理员授权级别展示</span>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <h3>今日待录入体征</h3>
+        <button class="btn btn-ghost btn-sm" id="pending-refresh">刷新</button>
+      </div>
+      <div id="pending-box"></div>
+    </div>
+
+    <div class="grid grid-3 stagger mt-24" id="elder-cards"></div>
+
+    <div class="grid grid-3 mt-24">
+      <div class="placeholder-card">
+        <span class="ph-icon">💊</span>
+        <div>用药提醒</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+      <div class="placeholder-card">
+        <span class="ph-icon">📝</span>
+        <div>照护记录</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+      <div class="placeholder-card">
+        <span class="ph-icon">📞</span>
+        <div>呼叫转接</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      var session = KB.requireRole(["nurse"]);
+      KB.renderTopbar();
+      document.getElementById("greet").textContent =
+        "您好，" + (session.displayName || session.username || "护工");
+
+      var box = document.getElementById("elder-cards");
+      var pendingBox = document.getElementById("pending-box");
+
+      var ITEM_LABEL = { blood_pressure: "血压", blood_sugar: "血糖", weight: "体重" };
+      var CATS = [
+        ["vital", "体征"], ["body_part", "身体部位"], ["medication", "当前用药"], ["chronic", "慢性病"],
+      ];
+      var SEV = { normal: null, attention: ["tag-amber", "需关注"], warning: ["tag-lacquer", "预警"] };
+
+      function sevTag(s) {
+        var m = SEV[s];
+        return m ? "<span class='tag " + m[0] + "'>" + m[1] + "</span>" : "";
+      }
+      function statusTag(s) {
+        var map = { active: ["tag-moss", "在住"], paused: ["tag-amber", "暂停"], discharged: ["tag-lacquer", "已退住"] };
+        var m = map[s] || ["", s];
+        return "<span class='tag " + m[0] + "'>" + KB.esc(m[1]) + "</span>";
+      }
+      function itemLabel(k) { return ITEM_LABEL[k] || k; }
+
+      function load() {
+        loadPending();
+        KB.renderState(box, { kind: "loading" });
+        box.style.display = "grid";
+        Promise.all([
+          KB.api("GET", "/api/v1/elders"),
+          KB.api("GET", "/api/v1/nurse/health-overview"),
+        ]).then(function (rs) {
+          var rows = (rs[0] || []).filter(function (e) { return e.status !== "discharged"; });
+          var warnIds = rs[1] ? rs[1].warning_elder_ids || [] : [];
+          if (!rows.length) {
+            return KB.renderState(box, { kind: "empty", message: "当前楼栋暂无在住长者" });
+          }
+          box.innerHTML = rows.map(function (e) {
+            var warn = warnIds.indexOf(e.elder_id) !== -1
+              ? "<span class='tag tag-amber'>⚠ 体征预警</span>" : "";
+            return "<div class='card' style='cursor:pointer;' data-id='" + e.elder_id + "'>" +
+              "<div class='card-title'><h3>" + KB.esc(e.name) + "</h3>" + statusTag(e.status) + "</div>" +
+              "<div class='muted'>性别：" + (e.gender === "female" ? "女" : e.gender === "male" ? "男" : "—") +
+              " · " + (e.bed_no ? "床位 " + e.bed_no : "床位未分配") + "</div>" +
+              "<div class='mt-8'>" + warn + "</div>" +
+              "<div class='faint mt-8'>点击查看详情与基础健康</div></div>";
+          }).join("");
+          box.querySelectorAll("[data-id]").forEach(function (card) {
+            card.addEventListener("click", function () {
+              var e = rows.find(function (x) { return x.elder_id === card.dataset.id; });
+              openDetail(e);
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, load);
+        });
+      }
+
+      // ---------- 今日待录入体征 ----------
+
+      function loadPending() {
+        KB.renderState(pendingBox, { kind: "loading" });
+        KB.api("GET", "/api/v1/nurse/tasks/pending-measures").then(function (rows) {
+          if (!rows.length) {
+            return KB.renderState(pendingBox, { kind: "empty", message: "今日体征已全部录入，做得好" });
+          }
+          // 按长者分组
+          var byElder = {};
+          rows.forEach(function (r) {
+            if (!byElder[r.elder_id]) byElder[r.elder_id] = { name: r.elder_name, room: r.room_label, items: [] };
+            byElder[r.elder_id].items.push(r.item_key);
+          });
+          pendingBox.innerHTML = Object.keys(byElder).map(function (eid) {
+            var g = byElder[eid];
+            return "<div class='record-row'><div class='grow'><b>" + KB.esc(g.name) + "</b>" +
+              "<span class='faint'>　" + KB.esc(g.room || "房间未分配") + "　</span>" +
+              g.items.map(function (k) {
+                return "<button class='btn btn-ghost btn-sm' data-rec='" + eid + "' data-key='" + KB.esc(k) + "' style='margin:2px 6px 2px 0;'>+ " + KB.esc(itemLabel(k)) + "</button>";
+              }).join("") + "</div></div>";
+          }).join("");
+          pendingBox.querySelectorAll("[data-rec]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var g = byElder[b.dataset.rec];
+              recordForm(b.dataset.rec, g.name, "vital", b.dataset.key);
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(pendingBox, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadPending);
+        });
+      }
+      document.getElementById("pending-refresh").addEventListener("click", loadPending);
+
+      // ---------- 录入表单（体征快捷 / 详情内通用） ----------
+
+      function recordForm(elderId, elderName, category, itemKey) {
+        var catOpts = CATS.map(function (c) {
+          return "<option value='" + c[0] + "'" + (c[0] === category ? " selected" : "") + ">" + c[1] + "</option>";
+        }).join("");
+        var m = KB.openModal(
+          "<h3>录入健康记录 · " + KB.esc(elderName) + "</h3>" +
+          "<div class='warn-line'>⚠ <span>仅可录入基础健康信息；重大疾病等隐私级信息由医生填写。</span></div>" +
+          "<div class='form-error' data-err></div>" +
+          "<form>" +
+          "<div class='field'><label>类别</label><select name='category'" + (itemKey ? " disabled" : "") + ">" + catOpts + "</select></div>" +
+          "<div class='field'><label>项目<span class='req'>*</span></label><input name='item_key' required value='" + KB.esc(itemKey ? itemLabel(itemKey) : "") + "'" + (itemKey ? " readonly" : "") + " placeholder='如 血压 / 膝关节' /></div>" +
+          "<div class='field'><label>结果描述<span class='req'>*</span></label><textarea name='value_text' required placeholder='" + (itemKey === "blood_pressure" ? "如 135/85 mmHg" : itemKey === "blood_sugar" ? "如 6.1 mmol/L（空腹）" : itemKey === "weight" ? "如 58 kg" : "填写测量或观察结果") + "'></textarea></div>" +
+          "<div class='field'><label>评估</label><select name='severity'><option value='normal'>正常</option><option value='attention'>需关注</option><option value='warning'>预警</option></select></div>" +
+          "<div class='modal-actions'>" +
+          "<button type='button' class='btn btn-ghost' data-act='cancel'>取消</button>" +
+          "<button type='submit' class='btn btn-primary'>保存</button>" +
+          "</div></form>"
+        );
+        m.modal.querySelector("[data-act='cancel']").addEventListener("click", m.close);
+        m.modal.querySelector("form").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var errBox = m.modal.querySelector("[data-err]");
+          errBox.classList.remove("show");
+          var cat = itemKey ? category : this.elements.category.value;
+          var key = itemKey || this.elements.item_key.value.trim();
+          var body = {
+            category: cat,
+            item_key: key,
+            value_text: this.elements.value_text.value.trim(),
+            severity: this.elements.severity.value,
+          };
+          if (!key || !body.value_text) {
+            errBox.innerHTML = "⚠ 请填写项目与结果描述";
+            errBox.classList.add("show");
+            return;
+          }
+          var btn = m.modal.querySelector("button[type=submit]");
+          btn.disabled = true;
+          KB.api("POST", "/api/v1/elders/" + elderId + "/health", body).then(function () {
+            m.close();
+            KB.toast("已录入 " + key, "success");
+            loadPending();
+          }).catch(function (e) {
+            errBox.innerHTML = "⚠ " + KB.esc(KB.errText(e));
+            errBox.classList.add("show");
+            btn.disabled = false;
+          });
+        });
+      }
+
+      // ---------- 长者详情（基础信息 + 基础健康只读 + 录入） ----------
+
+      function openDetail(e) {
+        KB.api("GET", "/api/v1/elders/" + e.elder_id + "/health").then(function (p) {
+          renderDetail(e, p);
+        }).catch(function (err) {
+          var tip = err.status === 403
+            ? "暂无该长者的健康查看授权，请联系管理员在「健康授权」中开通。"
+            : KB.errText(err);
+          KB.toast(tip, "error");
+        });
+      }
+
+      function renderDetail(e, p) {
+        var sections = CATS.map(function (c) {
+          var rows = p.groups[c[0]] || [];
+          if (!rows.length) return "";
+          return "<h3 class='hp-head'>" + c[1] + "</h3><ul class='hp-list'>" +
+            rows.map(function (r) {
+              return "<li><b>" + KB.esc(r.item_key) + "</b>：" + KB.esc(r.value_text) + " " + sevTag(r.severity) + "</li>";
+            }).join("") + "</ul>";
+        }).join("");
+        if (!sections) sections = "<p class='muted mt-16'>暂无授权可见的健康记录</p>";
+
+        var m = KB.openModal(
+          "<h3>长者详情 · " + KB.esc(p.elder_name) + "</h3>" +
+          "<dl class='kv'>" +
+          "<dt>房间</dt><dd>" + KB.esc(p.room_label || "未分配") + "（" + KB.esc(p.building_code || "—") + " 栋）</dd>" +
+          "<dt>床位</dt><dd>" + KB.esc(e.bed_no || "未分配") + "</dd>" +
+          "<dt>在用设备</dt><dd>" + KB.esc(p.device_codes.join("、") || "无") + "</dd>" +
+          "<dt>可见级别</dt><dd>" + (p.viewer_level === "basic" ? "基础级（不含重大疾病）" : KB.esc(p.viewer_level)) + "</dd>" +
+          "</dl>" +
+          "<div>" + sections + "</div>" +
+          "<hr class='divider'>" +
+          "<div class='toolbar'><button class='btn btn-primary' id='dt-add'>+ 录入基础健康</button></div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' data-act='close'>关闭</button></div>"
+        );
+        m.modal.style.width = "min(640px, 100%)";
+        m.modal.querySelector("[data-act='close']").addEventListener("click", m.close);
+        m.modal.querySelector("#dt-add").addEventListener("click", function () {
+          recordForm(p.elder_id, p.elder_name, "vital", null);
+        });
+      }
+
+      load();
+    })();
+  </script>
+</body>
+</html>

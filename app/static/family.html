@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>康伴 · 家属工作台</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <header class="topbar" id="kb-topbar"></header>
+
+  <main class="page">
+    <div class="page-head">
+      <h1 id="greet">您好</h1>
+      <span class="faint">与您关联长者的健康档案、AI 健康分析与健康摘要（按授权级别展示）</span>
+    </div>
+
+    <div class="grid grid-2 stagger" id="elder-cards"></div>
+
+    <div class="grid grid-2 mt-24">
+      <div class="placeholder-card">
+        <span class="ph-icon">📹</span>
+        <div>家属关怀通话</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+      <div class="placeholder-card">
+        <span class="ph-icon">📰</span>
+        <div>每日日报</div>
+        <span class="ph-note">后续版本</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      var session = KB.requireRole(["family"]);
+      KB.renderTopbar();
+      document.getElementById("greet").textContent =
+        "您好，" + (session.displayName || session.username || "家属");
+
+      var box = document.getElementById("elder-cards");
+
+      // AI 服务开关（未配置时置灰按钮；/config/flags 为公开接口）
+      var aiEnabled = null;
+      KB.api("GET", "/api/v1/config/flags").then(function (f) {
+        aiEnabled = !!f.ai_analysis_enabled;
+      }).catch(function () { aiEnabled = false; });
+
+      var CATS = [
+        ["vital", "体征"], ["body_part", "身体部位"], ["medication", "当前用药"],
+        ["chronic", "慢性病"], ["major", "重大疾病"],
+      ];
+      var SEV = { normal: null, attention: ["tag-amber", "需关注"], warning: ["tag-lacquer", "预警"] };
+
+      function sevTag(s) {
+        var m = SEV[s];
+        return m ? "<span class='tag " + m[0] + "'>" + m[1] + "</span>" : "";
+      }
+      function statusTag(s) {
+        var map = { active: ["tag-moss", "在住"], paused: ["tag-amber", "暂停"], discharged: ["tag-lacquer", "已退住"] };
+        var m = map[s] || ["", s];
+        return "<span class='tag " + m[0] + "'>" + KB.esc(m[1]) + "</span>";
+      }
+      function fmtTime(s) {
+        if (!s) return "—";
+        var d = new Date(s);
+        if (isNaN(d)) return String(s).replace("T", " ").slice(0, 16);
+        return d.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false,
+          year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(/\//g, "-");
+      }
+
+      function load() {
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/elders").then(function (rows) {
+          if (!rows || !rows.length) {
+            return KB.renderState(box, { kind: "empty", message: "暂无关联的长者，请联系社区工作人员为您建立关联" });
+          }
+          box.innerHTML = rows.map(function (e) {
+            return "<div class='card' style='cursor:pointer;' data-id='" + e.elder_id + "'>" +
+              "<div class='card-title'><h3>" + KB.esc(e.name) + "</h3>" + statusTag(e.status) + "</div>" +
+              "<div class='muted'>" + (e.bed_no ? "床位 " + e.bed_no : "床位未分配") + " · " +
+              (e.status === "active" ? "一切安好" : "状态详见工作人员说明") + "</div>" +
+              "<div class='faint mt-8'>点击查看健康档案与 AI 分析</div></div>";
+          }).join("");
+          box.querySelectorAll("[data-id]").forEach(function (card) {
+            card.addEventListener("click", function () {
+              var e = rows.find(function (x) { return x.elder_id === card.dataset.id; });
+              openHealth(e);
+            });
+          });
+        }).catch(function (e) {
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, load);
+        });
+      }
+
+      // ---------- 健康档案弹窗 ----------
+
+      function openHealth(e) {
+        KB.api("GET", "/api/v1/elders/" + e.elder_id + "/health").then(function (p) {
+          renderHealthModal(p);
+        }).catch(function (err) {
+          KB.toast(KB.errText(err), "error");
+        });
+      }
+
+      function renderHealthModal(p) {
+        var sections = CATS.map(function (c) {
+          var rows = p.groups[c[0]] || [];
+          if (!rows.length) return "";
+          return "<h3 class='hp-head'>" + c[1] + "</h3><ul class='hp-list'>" +
+            rows.map(function (r) {
+              return "<li><b>" + KB.esc(r.item_key) + "</b>：" + KB.esc(r.value_text) + " " + sevTag(r.severity) + "</li>";
+            }).join("") + "</ul>";
+        }).join("");
+        if (!sections) {
+          sections = "<p class='muted mt-16'>暂无授权可见的健康记录</p>";
+        }
+        var levelText = p.viewer_level === "confidential" ? "完整级（含重大疾病）"
+          : p.viewer_level === "basic" ? "基础级" : "未授权";
+        var aiDisabled = aiEnabled === false ? " disabled title='AI 服务尚未配置'" : "";
+
+        var m = KB.openModal(
+          "<h3>健康档案 · " + KB.esc(p.elder_name) + "</h3>" +
+          "<p class='faint'>房间：" + KB.esc(p.room_label || "未分配") +
+          "｜楼栋：" + KB.esc(p.building_code || "—") +
+          "｜在用设备：" + KB.esc(p.device_codes.join("、") || "无") +
+          " 　<span class='tag tag-clay'>" + levelText + "</span></p>" +
+          "<div>" + sections + "</div>" +
+          "<hr class='divider'>" +
+          "<div class='toolbar'>" +
+          "<button class='btn btn-primary' id='hp-ai'" + aiDisabled + ">AI 帮我分析</button>" +
+          "<button class='btn btn-ghost' id='hp-ai-history'>AI 分析历史</button>" +
+          "<button class='btn btn-ghost' id='hp-summaries'>健康摘要</button>" +
+          "<button class='btn btn-ghost' id='hp-export'>导出打印</button>" +
+          "</div>" +
+          "<div id='hp-extra'></div>" +
+          "<div class='modal-actions'><button class='btn btn-ghost' data-act='close'>关闭</button></div>"
+        );
+        m.modal.style.width = "min(680px, 100%)";
+        m.modal.querySelector("[data-act='close']").addEventListener("click", m.close);
+
+        var extra = m.modal.querySelector("#hp-extra");
+
+        // AI 一键分析
+        m.modal.querySelector("#hp-ai").addEventListener("click", function () {
+          var btn = this;
+          btn.disabled = true;
+          btn.textContent = "分析中…";
+          KB.api("POST", "/api/v1/elders/" + p.elder_id + "/health/ai-analysis").then(function (a) {
+            extra.innerHTML = aiBlock(a);
+          }).catch(function (err) {
+            var tip;
+            if (err.status === 503) tip = "AI 服务尚未配置，请联系管理员在服务端填写 LLM 配置后重试。";
+            else if (err.status === 429) tip = err.message || "分析请求太频繁，请稍后再试。";
+            else if (err.status === 502) tip = "AI 服务暂时不可用，请稍后重试。";
+            else tip = KB.errText(err);
+            extra.innerHTML = "<div class='warn-line mt-16'>⚠ <span>" + KB.esc(tip) + "</span></div>";
+          }).finally(function () {
+            btn.disabled = aiEnabled === false;
+            btn.textContent = "AI 帮我分析";
+          });
+        });
+
+        // AI 分析历史
+        m.modal.querySelector("#hp-ai-history").addEventListener("click", function () {
+          KB.api("GET", "/api/v1/elders/" + p.elder_id + "/health/ai-analyses").then(function (rows) {
+            if (!rows.length) {
+              extra.innerHTML = "<div class='state mt-16'><span class='big'>🍃</span>还没有 AI 分析记录，点击「AI 帮我分析」生成第一份</div>";
+              return;
+            }
+            extra.innerHTML = rows.map(aiBlock).join("");
+          }).catch(function (err) {
+            extra.innerHTML = "<div class='warn-line mt-16'>⚠ <span>" + KB.esc(KB.errText(err)) + "</span></div>";
+          });
+        });
+
+        // 健康摘要（医生生成，家属已阅回执）
+        m.modal.querySelector("#hp-summaries").addEventListener("click", function () {
+          KB.api("GET", "/api/v1/elders/" + p.elder_id + "/health/summaries").then(function (rows) {
+            if (!rows.length) {
+              extra.innerHTML = "<div class='state mt-16'><span class='big'>📄</span>暂无健康摘要，医护人员生成后可在此查看并确认已阅</div>";
+              return;
+            }
+            extra.innerHTML = rows.map(function (s) {
+              var acked = !!s.acknowledged_by;
+              return "<div class='card mt-16'><div class='card-title'><h3>健康摘要 v" + s.version + "</h3>" +
+                "<span class='faint'>" + fmtTime(s.created_at) + "</span></div>" +
+                "<p class='ai-text'>" + KB.esc(s.summary_text) + "</p>" +
+                "<div class='mt-8'>" + (acked
+                  ? "<span class='tag tag-moss'>已确认已阅</span> <span class='faint'>" + fmtTime(s.acknowledged_at) + "</span>"
+                  : "<button class='btn btn-primary btn-sm' data-ack='" + s.summary_id + "'>我已阅读</button>") +
+                "</div></div>";
+            }).join("");
+            extra.querySelectorAll("[data-ack]").forEach(function (b) {
+              b.addEventListener("click", function () {
+                b.disabled = true;
+                KB.api("POST", "/api/v1/elders/" + p.elder_id + "/health/summaries/" + b.dataset.ack + "/ack")
+                  .then(function () { KB.toast("已记录回执", "success"); b.outerHTML = "<span class='tag tag-moss'>已确认已阅</span>"; })
+                  .catch(function (err) { b.disabled = false; KB.toast(KB.errText(err), "error"); });
+              });
+            });
+          }).catch(function (err) {
+            var tip = err.status === 403
+              ? "查看健康摘要需要完整级（含重大疾病）授权，请联系管理员调整。"
+              : KB.errText(err);
+            extra.innerHTML = "<div class='warn-line mt-16'>⚠ <span>" + KB.esc(tip) + "</span></div>";
+          });
+        });
+
+        // 导出打印（打印版 HTML，浏览器另存 PDF）
+        m.modal.querySelector("#hp-export").addEventListener("click", function () {
+          KB.openAuthorized("/api/v1/elders/" + p.elder_id + "/health/export");
+        });
+      }
+
+      function aiBlock(a) {
+        return "<div class='ai-block'><h3>AI 健康分析</h3>" +
+          "<p class='ai-text mt-8'>" + KB.esc(a.analysis_text) + "</p>" +
+          "<div class='ai-meta'>模型：" + KB.esc(a.model_name) +
+          " ｜ 生成时间：" + fmtTime(a.created_at) + "</div></div>";
+      }
+
+      load();
+    })();
+  </script>
+</body>
+</html>

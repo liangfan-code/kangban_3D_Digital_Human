@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "default_avatar_id": "yoimiya",
+  "avatars": [
+    {
+      "id": "yoimiya",
+      "name": "宵宫",
+      "description": "橙红色服饰的少女形象，默认形象，体积最小（5.75 MB）",
+      "model_url": "/vrm/models/Yoimiya.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.62,
+        "distance_ratio": 1.6,
+        "look_at_ratio": 0.62
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "firefly",
+      "name": "流萤",
+      "description": "银发少女形象（13.88 MB，平板加载比默认形象慢）",
+      "model_url": "/vrm/models/Firefly.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.62,
+        "distance_ratio": 1.6,
+        "look_at_ratio": 0.62
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "neuvillette",
+      "name": "那维莱特",
+      "description": "银发男性形象（6.28 MB），追加自 vrm-playground",
+      "model_url": "/vrm/models/Neuvillette.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.62,
+        "distance_ratio": 1.6,
+        "look_at_ratio": 0.62
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "danheng",
+      "name": "丹恒",
+      "description": "黑发男性形象（7.76 MB），追加自 vrm-playground",
+      "model_url": "/vrm/models/Danheng.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.62,
+        "distance_ratio": 1.6,
+        "look_at_ratio": 0.62
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "amazonas",
+      "name": "亚马逊",
+      "description": "户外探险风少女形象（2.7 MB，用户自选追加）",
+      "model_url": "/vrm/models/Amazonas.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.62,
+        "distance_ratio": 1.6,
+        "look_at_ratio": 0.62
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "lilshark",
+      "name": "小鲨鱼",
+      "description": "鲨鱼主题卡通形象（6.8 MB，用户自选追加）",
+      "model_url": "/vrm/models/LilShark.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.5,
+        "distance_ratio": 2.2,
+        "look_at_ratio": 0.5
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    },
+    {
+      "id": "ajomajo",
+      "name": "阿乔魔女",
+      "description": "魔女风格形象（2.1 MB，用户自选追加）",
+      "model_url": "/vrm/models/AjoMajo.vrm",
+      "scale": 1.0,
+      "rotation_y": 0,
+      "camera": {
+        "fov": 32,
+        "height_ratio": 0.5,
+        "distance_ratio": 2.2,
+        "look_at_ratio": 0.5
+      },
+      "animation_root": "/vrm/animations/common/",
+      "supported_actions": ["wave", "bye", "nod", "shake", "clap", "think", "tilt", "comfort", "stretch"],
+      "action_clips": {},
+      "base_clips": {}
+    }
+  ],
+  "field_notes": {
+    "version": "配置结构版本，目前只接受 1",
+    "default_avatar_id": "启动时默认加载的形象 id，必须存在于 avatars 列表",
+    "id": "形象唯一标识，小写字母/数字/下划线/短横线",
+    "name": "显示名，用于切换控件与状态提示",
+    "model_url": "VRM 文件地址，必须指向本站 .vrm 资源",
+    "scale": "可选，模型整体缩放，默认 1.0",
+    "rotation_y": "可选，朝向校准偏移（角度，相对该模型的默认正面）。默认 0 表示沿用 VRM 规范默认朝向：VRM 0.0 由 rotateVRM0 自动转 π、VRM 1.0 保持原样，两者都会正对相机。只有模型本身朝向异常时才需要填，例如背对相机填 180",
+    "camera": "可选，相机参数：fov 视野角、height_ratio 相机高度占模型高度比例、distance_ratio 相机距离占模型高度比例、look_at_ratio 注视点高度比例；按模型实际包围盒计算，切换形象后自动重新构图",
+    "animation_root": "可选，该形象的动画根目录，默认沿用 actions.json 的 asset_root",
+    "supported_actions": "可选，该形象支持的动作 id 列表（必须来自 actions.json，动作协议不变）；缺省表示全部支持",
+    "action_clips": "可选，按动作 id 覆盖 clip 列表，例如 {\"wave\": [\"raise-hand.vrma\"]}；文件名相对 animation_root",
+    "base_clips": "可选，覆盖基础循环池，例如 {\"idle\": [\"idle.vrma\"], \"talking\": [\"idle-talking.vrma\"]}"
+  }
+}
