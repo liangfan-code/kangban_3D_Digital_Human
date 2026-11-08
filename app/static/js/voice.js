@@ -116,7 +116,7 @@
         break;
       case "tts":
         appendLog(logReply, "🔊 " + ev.text, "r");
-        playTts(ev.audio, ev.sample_rate);
+        playTts(ev.audio, ev.sample_rate, ev.visemes);
         break;
       case "done":
         if (!ev.text) { setStatus("没有听清，请再说一次", "warn"); }
@@ -155,12 +155,16 @@
     }
   }
 
-  // ---------- TTS 播放（base64 16k PCM → AudioContext）----------
-  function playTts(base64Pcm, sampleRate) {
+  // ---------- TTS 播放（base64 16k PCM + viseme 时间轴 → AudioContext）----------
+  function playTts(base64Pcm, sampleRate, visemes) {
     var bin = atob(base64Pcm);
     var bytes = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    ttsQueue.push({ bytes: bytes, rate: sampleRate || 16000 });
+    ttsQueue.push({
+      bytes: bytes,
+      rate: sampleRate || 16000,
+      visemes: Array.isArray(visemes) ? visemes : []
+    });
     drainTts();
   }
   function drainTts() {
@@ -193,6 +197,7 @@
     function unmute() {
       if (unmuted) return;
       unmuted = true;
+      if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
       if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = true; });
       ttsPlaying = false;
       drainTts();
@@ -201,6 +206,10 @@
     src.onended = unmute;
     setTimeout(unmute, (ch.length / item.rate) * 1000 + 800); // 播放时长+800ms 兜底
     src.start();
+    // Day5.1：按该段音频的五口型时间轴驱动嘴部；无时间轴时引擎回落到能量分析
+    if (window.KangbanAvatar && KangbanAvatar.attachVisemes) {
+      KangbanAvatar.attachVisemes(item.visemes);
+    }
   }
 
   // ---------- WebRTC 音频上行 ----------
@@ -244,11 +253,90 @@
   function stopVoice() {
     if (pc) { pc.close(); pc = null; }
     if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
+    if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
     setStatus("已停止聆听", "");
   }
 
-  // ---------- 声纹录入（AudioWorklet 采集 2 段 × 5 秒，带倒计时）----------
+  // ---------- 声纹录入（按有效语音采集：每段说满 2 秒自动停，失败段可重录）----------
   // channel: "device"（单人间自动锁定）| "admin"（双人间：管理员指定 elder_id，ADR-005）
+  var ENROLL_TARGET_VOICED = 2.0;   // 每段目标有效语音秒数
+  var ENROLL_MIN_VOICED = 1.2;      // 低于该值该段作废
+  var ENROLL_MAX_SECONDS = 8.0;     // 单段最长等待，防卡死
+  var ENROLL_SEGMENTS = 2;          // 与后端「至少 2 段有效样本」对应
+  var ENROLL_MAX_ATTEMPTS = 3;      // 单段最多重录次数
+  var ENROLL_VOICED_RMS = 0.02;     // 有效语音判定（Float32 RMS）
+
+  function rmsOf(chunk) {
+    var sum = 0;
+    for (var i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
+    return chunk.length ? Math.sqrt(sum / chunk.length) : 0;
+  }
+
+  function peakRatio(int16arr) {
+    var peak = 0;
+    for (var i = 0; i < int16arr.length; i++) {
+      var v = Math.abs(int16arr[i]);
+      if (v > peak) peak = v;
+    }
+    return peak / 32767;
+  }
+
+  function captureOneSegment(node, ctx, index, attempt) {
+    var attemptNo = attempt || 1;
+    return new Promise(function (resolve, reject) {
+      var samples = [], voiced = 0, elapsed = 0, lastShown = -1, done = false;
+      function settle() {
+        done = true;
+        node.port.onmessage = null;
+        var pcm = downsampleToInt16(flatten(samples), ctx.sampleRate);
+        var peak = peakRatio(pcm);
+        if (voiced < ENROLL_MIN_VOICED || peak < ENROLL_VOICED_RMS) {
+          if (attemptNo >= ENROLL_MAX_ATTEMPTS) {
+            reject(new Error("第 " + (index + 1) + " 段有效语音太少，请靠近麦克风、正常音量连续说 2 秒"));
+            return;
+          }
+          setStatus("第 " + (index + 1) + " 段有效语音不足，请重录（第 " + (attemptNo + 1) + " 次尝试）", "warn");
+          setTimeout(function () { resolve(captureOneSegment(node, ctx, index, attemptNo + 1)); }, 600);
+          return;
+        }
+        if (peak > 0.9) appendLog(logReply, "[声纹] 第 " + (index + 1) + " 段音量偏大，可能削波", "warn");
+        resolve(pcm);
+      }
+      node.port.onmessage = function (e) {
+        if (done) return;
+        var chunk = e.data;
+        samples.push(chunk);
+        elapsed += chunk.length / ctx.sampleRate;
+        if (rmsOf(chunk) >= ENROLL_VOICED_RMS) voiced += chunk.length / ctx.sampleRate;
+        var shown = Math.floor(voiced * 10) / 10;
+        if (shown !== lastShown) {
+          lastShown = shown;
+          setStatus("第 " + (index + 1) + "/" + ENROLL_SEGMENTS + " 段：有效语音 "
+            + shown.toFixed(1) + "/" + ENROLL_TARGET_VOICED.toFixed(1)
+            + " 秒（最多等 " + ENROLL_MAX_SECONDS + " 秒）", "warn");
+        }
+        if (voiced >= ENROLL_TARGET_VOICED || elapsed >= ENROLL_MAX_SECONDS) settle();
+      };
+    });
+  }
+
+  function captureAllSegments(node, ctx) {
+    var segments = [], index = 0;
+    function next() {
+      if (index >= ENROLL_SEGMENTS) return Promise.resolve(segments);
+      var current = index;
+      return captureOneSegment(node, ctx, current).then(function (pcm) {
+        segments.push(pcm);
+        index += 1;
+        if (index < ENROLL_SEGMENTS) {
+          setStatus("✅ 第 " + (current + 1) + " 段完成，请再念一遍「今天天气真好，我很开心」", "warn");
+        }
+        return next();
+      });
+    }
+    return next();
+  }
+
   function enroll(channel) {
     if (!deviceToken) { setStatus("请先设备登录", "warn"); return; }
     var adminToken = "", elderId = "";
@@ -259,45 +347,26 @@
         setStatus("管理员通道：请填写管理员 JWT 和长者 elder_id", "err"); return;
       }
     }
-    var SEG_SAMPLES = 48000 * 5; // 每段 5 秒 @48kHz：给慢速朗读留余量
-    setStatus("声纹录入：点击后请【立刻开始念】「今天天气真好，我很开心」，持续念满 5 秒（可重复念），共 2 段", "warn");
+    setStatus("声纹录入：点击后请【立刻开始念】「今天天气真好，我很开心」，每段说满 2 秒自动结束，共 2 段", "warn");
+    var activeStream = null, activeCtx = null, activeSrc = null;
+    function stopCapture() {
+      if (activeSrc) { try { activeSrc.disconnect(); } catch (e) {} activeSrc = null; }
+      if (activeStream) { activeStream.getTracks().forEach(function (t) { t.stop(); }); activeStream = null; }
+      if (activeCtx) { try { activeCtx.close(); } catch (e) {} activeCtx = null; }
+    }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      activeStream = stream;
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      var src = null; // 提升到外层作用域：后面的 .then 链也要用（src.disconnect）
+      activeCtx = ctx;
       return ctx.audioWorklet.addModule("/js/audio-worklet.js").then(function () {
-        src = ctx.createMediaStreamSource(stream);
+        activeSrc = ctx.createMediaStreamSource(stream);
         var node = new AudioWorkletNode(ctx, "capture-processor");
-        src.connect(node); // 不连 destination，避免回放啸叫
-        var samples = [];
-        var segments = [];
-        var lastRemain = -1; // 倒计时去重：只在整秒变化时刷新状态条
-        return new Promise(function (resolve) {
-          node.port.onmessage = function (e) {
-            samples.push(e.data);
-            var total = samples.reduce(function (s, a) { return s + a.length; }, 0);
-            if (total >= SEG_SAMPLES) {
-              segments.push(downsampleToInt16(flatten(samples), ctx.sampleRate));
-              samples = [];
-              lastRemain = -1;
-              if (segments.length >= 2) { resolve({ segments: segments, ctx: ctx, stream: stream }); }
-              else setStatus("✅ 第 1 段完成！请再念一遍「今天天气真好，我很开心」", "warn");
-            } else {
-              var remain = Math.ceil((SEG_SAMPLES - total) / 48000);
-              if (remain !== lastRemain) {
-                lastRemain = remain;
-                setStatus("第 " + (segments.length + 1) + " 段录制中，请持续念… 剩 " + remain + " 秒", "warn");
-              }
-            }
-          };
-        });
-      }).then(function (r) {
-        return new Promise(function (res) { setTimeout(res, 300); }).then(function () { return r; });
-      }).then(function (r) {
-        src.disconnect();
-        r.stream.getTracks().forEach(function (t) { t.stop(); });
-        r.ctx.close();
+        activeSrc.connect(node); // 不连 destination，避免回放啸叫
+        return captureAllSegments(node, ctx);
+      }).then(function (segments) {
+        stopCapture();
         var body = {
-          audio_samples: r.segments.map(function (seg) { return toBase64(seg); }),
+          audio_samples: segments.map(function (seg) { return toBase64(seg); }),
           sample_uri: null
         };
         var url, headers;
@@ -320,10 +389,12 @@
           setStatus("✅ 声纹录入成功，请说第一句话验证", "ok");
           appendLog(logReply, "[声纹] 录入成功 id=" + r.j.voiceprint_id, "r");
         } else {
-          setStatus("声纹录入失败：" + (r.j.detail || JSON.stringify(r.j)), "err");
+          var msg = (r.j && r.j.error && r.j.error.message) || r.j.detail || JSON.stringify(r.j);
+          setStatus("声纹录入失败：" + msg, "err");
         }
       });
     }).catch(function (err) {
+      stopCapture();
       setStatus("声纹录入失败：" + err.message, "err");
     });
   }

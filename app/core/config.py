@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     voiceprint_model_path: str | None = None
     # Day3：CAMPPlus 余弦相似度阈值（POC-04 提前执行结论基线 0.55，环境变量可调）
     voiceprint_threshold: float = 0.55
+    # 单段有效语音最短时长（秒）：低于该值的样本作废，默认放宽到 1.2 秒
+    voiceprint_min_speech_seconds: float = 1.2
+    # 一次录入的有效语音合计下限（秒）：多段平均前先卡总时长，避免短样本拉低质量
+    voiceprint_enroll_min_speech_seconds: float = 3.0
     voiceprint_encryption_key: str | None = None
 
     # ---- Day3 实时语音（全部 Optional，缺省可启动；FunASR/模型未配置时旧接口不受影响）----

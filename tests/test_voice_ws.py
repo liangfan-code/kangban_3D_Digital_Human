@@ -172,3 +172,44 @@ async def test_tts_send_sets_echo_guard(monkeypatch):
     expected = duration_ms + TTS_ECHO_GUARD_EXTRA_MS
     remaining_ms = (session._echo_guard_until - time.monotonic()) * 1000
     assert expected - 100 <= remaining_ms <= expected + 100
+
+
+async def test_tts_event_carries_empty_viseme_timeline_for_silence(monkeypatch):
+    """TTS 事件必须带 visemes 字段；近静音音频 → 空时间轴（前端自然闭嘴）。"""
+    events: list[dict] = []
+
+    async def send_event(event: dict) -> None:
+        events.append(event)
+
+    session = VoiceSession(uuid4(), [], {}, send_event)
+    monkeypatch.setattr("app.services.voice.get_tts_provider", lambda: FakeTTSProvider())
+    await session._synthesize_and_send("你好")
+
+    tts_events = [event for event in events if event["type"] == "tts"]
+    assert len(tts_events) == 1
+    assert tts_events[0]["visemes"] == []
+
+
+async def test_tts_event_carries_viseme_timeline_for_tone(monkeypatch):
+    """有能量的音频 → 非空五口型时间轴，区间字段合法。"""
+
+    class ToneTTSProvider(FakeTTSProvider):
+        async def synthesize(self, text: str) -> bytes:
+            t = np.arange(16000) / 16000
+            return (0.3 * np.sin(2 * np.pi * 250 * t) * 32767).astype("<i2").tobytes()
+
+    events: list[dict] = []
+
+    async def send_event(event: dict) -> None:
+        events.append(event)
+
+    session = VoiceSession(uuid4(), [], {}, send_event)
+    monkeypatch.setattr("app.services.voice.get_tts_provider", lambda: ToneTTSProvider())
+    await session._synthesize_and_send("你好")
+
+    segments = [event for event in events if event["type"] == "tts"][0]["visemes"]
+    assert segments
+    for segment in segments:
+        assert set(segment) == {"viseme", "start_ms", "end_ms"}
+        assert segment["viseme"] in {"a", "i", "u", "e", "o"}
+        assert segment["start_ms"] < segment["end_ms"]

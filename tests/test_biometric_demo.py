@@ -12,7 +12,7 @@ import pytest
 from app.services.voice import enroll_voiceprint
 
 # 与 test_voiceprint_service 相同的确定性假向量协议：首字节偶数→A，奇数→B
-SAMPLE_EVEN = bytes([0]) * 6400
+SAMPLE_EVEN = bytes([0]) * 96000  # 3 秒 16k PCM：满足录入总时长下限
 SAMPLE_ODD = bytes([3]) * 6400  # B 与 A 正交，cosine=0
 
 

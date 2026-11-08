@@ -54,6 +54,7 @@ from app.services import actions as action_service
 from app.services import context_summary, conversation_store
 from app.services.session_state import get_session_store
 from app.services.slot_extractor import extract_slots
+from app.services.viseme import build_viseme_timeline
 
 logger = get_logger(__name__)
 
@@ -158,7 +159,10 @@ def get_voiceprint_provider() -> VoiceprintProvider | None:
         settings = get_settings()
         if settings.sherpa_model_dir:
             try:
-                _voiceprint_provider = SherpaVoiceprintProvider(settings.sherpa_model_dir)
+                _voiceprint_provider = SherpaVoiceprintProvider(
+                    settings.sherpa_model_dir,
+                    verify_seconds=settings.voiceprint_min_speech_seconds,
+                )
                 logger.info(
                     "voiceprint provider loaded",
                     extra={"event": "voiceprint_provider_loaded"},
@@ -261,9 +265,41 @@ async def enroll_voiceprint(
     if elder is None:
         raise LookupError("长者不存在")
     if provider is None:
+        if get_settings().sherpa_model_dir:
+            raise ProviderUnavailable(
+                "声纹模型加载失败（检查 models/ 下 CAM++ 与 ten-vad 文件，或查看启动日志）"
+            )
         raise ProviderUnavailable("声纹模型未配置（SHERPA_MODEL_DIR），无法录入")
 
-    embeddings = [await asyncio.to_thread(provider.extract_embedding, s) for s in audio_samples]
+    settings = get_settings()
+    speech_only = getattr(provider, "speech_only", None)
+    min_samples = 2 if len(audio_samples) >= 2 else 1
+    embeddings: list[list[float]] = []
+    speech_ms = 0
+    skipped: list[str] = []
+    for sample in audio_samples:
+        speaker_audio = sample
+        try:
+            if speech_only is not None:
+                speaker_audio = await asyncio.to_thread(speech_only, sample)
+            embedding = await asyncio.to_thread(provider.extract_embedding, speaker_audio)
+        except ValueError as exc:
+            # 单段不合格只作废该段：另一段合格时仍可录入（减轻重复朗读负担）
+            skipped.append(str(exc))
+            continue
+        embeddings.append(embedding)
+        # 16kHz int16：字节数 / 32 = 毫秒
+        speech_ms += len(speaker_audio) // 32
+    if len(embeddings) < min_samples:
+        detail = "；".join(dict.fromkeys(skipped)) or "样本无效"
+        raise ValueError(
+            f"有效样本不足（{len(embeddings)}/{min_samples} 段）：{detail}，请重录未通过的那一段"
+        )
+    if speech_ms < settings.voiceprint_enroll_min_speech_seconds * 1000:
+        raise ValueError(
+            f"有效语音合计仅 {speech_ms / 1000:.1f} 秒，需至少 "
+            f"{settings.voiceprint_enroll_min_speech_seconds:g} 秒，请每段再多说一会儿"
+        )
     mean = [
         sum(col) / len(embeddings) for col in zip(*embeddings, strict=True)
     ]
@@ -286,6 +322,9 @@ async def enroll_voiceprint(
             "elder_id": str(elder_id),
             "voiceprint_id": str(record.voiceprint_id),
             "samples": len(audio_samples),
+            "samples_valid": len(embeddings),
+            "samples_skipped": len(skipped),
+            "speech_ms": speech_ms,
         },
     )
     return record
@@ -972,12 +1011,19 @@ class VoiceSession:
                 }
             )
             return
+        # Day5.1：随 TTS 音频一起下发五口型时间轴；计算失败只丢口型，不阻断出声
+        try:
+            visemes = build_viseme_timeline(pcm, tts.sample_rate())
+        except Exception:  # noqa: BLE001
+            logger.exception("viseme timeline build failed")
+            visemes = []
         await self.send_event(
             {
                 "type": "tts",
                 "text": text,
                 "audio": base64.b64encode(pcm).decode("ascii"),
                 "sample_rate": tts.sample_rate(),
+                "visemes": visemes,
             }
         )
         # 回声防护窗：按本次音频播放时长 + 余量丢弃上行（前端播放期静音可能因

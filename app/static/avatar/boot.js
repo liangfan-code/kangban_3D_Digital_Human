@@ -165,6 +165,13 @@ window.KangbanAvatar = {
     pending.stream = null;
     avatar?.detachStream();
   },
+  /** Day5.1 段级 viseme 时间轴（[{viseme,start_ms,end_ms}]，相对该段音频起点） */
+  attachVisemes(timeline) {
+    avatar?.attachVisemes(timeline);
+  },
+  clearVisemes() {
+    avatar?.clearVisemes();
+  },
   /** 信令 kind=action 触发的动作播放 */
   playAction(actionId, param = null) {
     if (!actionId) return;

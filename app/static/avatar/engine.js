@@ -4,7 +4,7 @@
  * 职责：
  * - 加载本地 VRM 模型与 VRMA 动作（全部本地资源，无 CDN）
  * - 待机循环 + 随机眨眼
- * - 通话时用远端音频的 AnalyserNode 能量驱动口型（不按文本时长估算）
+ * - 通话时优先按 TTS 下发的五口型时间轴驱动嘴部；无时间轴时回落 AnalyserNode 能量开合
  * - 按动作表随机选择 clip，使用 AnimationMixer crossFade 平滑过渡
  *
  * 前端只依赖 three / @pixiv/three-vrm / @pixiv/three-vrm-animation 的
@@ -28,6 +28,10 @@ const ACTION_FADE = 0.25;
 const MOUTH_ATTACK = 1.0;
 const MOUTH_RELEASE = 3.6;
 const SILENCE_HOLD = 0.45;
+// Day5.1：五口型开合基准（a 最大、i/e 偏扁、o/u 圆唇）与下颌兜底角度
+const VISEME_KEYS = ['a', 'i', 'u', 'e', 'o'];
+const VISEME_OPEN = { a: 1.0, i: 0.45, u: 0.5, e: 0.6, o: 0.8 };
+const JAW_MAX_OPEN = 0.26;
 
 export class KangbanAvatar {
   /**
@@ -79,6 +83,15 @@ export class KangbanAvatar {
     this.mode = 'idle'; // idle | calling | in_call | off
     this.speaking = false;
     this.mouthLevel = 0;
+    // Day5.1 口型时间轴状态：expression 优先，模型无元音表情时回落 jaw
+    this.visemeTimeline = null;
+    this.visemeStartedAt = 0;
+    this.visemeWeights = { a: 0, i: 0, u: 0, e: 0, o: 0 };
+    this.expressionByViseme = {};
+    this.mouthOpenMode = 'none'; // expression | jaw | none
+    this.jawNode = null;
+    this.jawBaseRotationX = 0;
+    this.jawOpenSign = -1;
     this.silenceTime = 0;
 
     this.baseMode = 'idle';
@@ -667,7 +680,8 @@ export class KangbanAvatar {
     if (this.vrm && !this.vrm.scene.parent) {
       this.scene.add(this.vrm.scene);
     }
-    this._setMouth(this.mouthLevel);
+    this._bindMouthChannels(this.vrm);
+    this._resetMouth();
   }
 
   _installLoaded(def, resolved, loaded) {
@@ -697,6 +711,8 @@ export class KangbanAvatar {
     }
     this.scene.add(this.vrm.scene);
     this._frameCamera(def);
+    this._bindMouthChannels(this.vrm);
+    this._resetMouth();
   }
 
   _rollbackAvatar(loaded, snapshot) {
@@ -764,7 +780,8 @@ export class KangbanAvatar {
     this.baseMode = null;
     this.blinkPhase = -1;
     this.blinkGap = BLINK_MIN_GAP;
-    this._setMouth(this.mouthLevel);
+    this._bindMouthChannels(this.vrm);
+    this._resetMouth();
     this._setBase(desired, { force: true });
   }
 
@@ -1153,7 +1170,7 @@ export class KangbanAvatar {
     if (next === 'idle' || next === 'calling' || next === 'off') {
       this.speaking = false;
       this.silenceTime = 0;
-      this._setMouth(0);
+      this._resetMouth();
       if (this.currentAction) {
         this.currentAction.fadeOut(ACTION_FADE);
         this.currentAction = null;
@@ -1195,39 +1212,174 @@ export class KangbanAvatar {
     this.sourceNode = null;
     this.analyser = null;
     this.timeData = null;
-    this._setMouth(0);
+    this._resetMouth();
   }
 
-  _setMouth(level) {
-    this.mouthLevel = Math.max(0, Math.min(1, level));
-    const em = this.vrm?.expressionManager;
-    if (!em) return;
-    try {
-      em.setValue('aa', this.mouthLevel * 0.85);
-      em.setValue('ih', this.mouthLevel * 0.12);
-    } catch (_error) {
-      // 模型未定义该表情时忽略
+  /** 绑定口型通道：优先五个元音表情；模型没有表情时回落到下颌骨。 */
+  _bindMouthChannels(vrm) {
+    this.visemeTimeline = null;
+    this.expressionByViseme = {};
+    this.mouthOpenMode = 'none';
+    this.jawNode = null;
+
+    const em = vrm?.expressionManager;
+    const candidates = {
+      a: ['aa', 'a'],
+      i: ['ih', 'i'],
+      u: ['ou', 'u'],
+      e: ['ee', 'e'],
+      o: ['oh', 'o'],
+    };
+    if (em) {
+      for (const key of VISEME_KEYS) {
+        const name = candidates[key].find((candidate) => {
+          try {
+            return Boolean(em.getExpression(candidate));
+          } catch (_error) {
+            return false;
+          }
+        });
+        if (name) this.expressionByViseme[key] = name;
+      }
     }
+
+    if (Object.keys(this.expressionByViseme).length > 0) {
+      this.mouthOpenMode = 'expression';
+      return;
+    }
+    try {
+      this.jawNode = vrm?.humanoid?.getNormalizedBoneNode('jaw') || null;
+    } catch (_error) {
+      this.jawNode = null;
+    }
+    if (this.jawNode) {
+      this.mouthOpenMode = 'jaw';
+      this.jawBaseRotationX = this.jawNode.rotation.x;
+      this.jawOpenSign = this._jawOpenSign(this.jawNode, this.jawBaseRotationX);
+    }
+  }
+
+  /** 用世界坐标探测下颌旋转方向：让孩子节点更靠下的方向定义为张嘴。 */
+  _jawOpenSign(node, baseX) {
+    const probe = (delta) => {
+      node.rotation.x = baseX + delta;
+      node.updateWorldMatrix(true, true);
+      const child = node.children[0];
+      if (!child) return null;
+      const world = new THREE.Vector3();
+      child.getWorldPosition(world);
+      return world.y;
+    };
+    const up = probe(0.2);
+    const down = probe(-0.2);
+    node.rotation.x = baseX;
+    if (up === null || down === null) return -1;
+    return down < up ? -1 : 1;
+  }
+
+  /** Day5.1：挂一段音频的 viseme 时间轴（时间相对该段音频起点，单位毫秒）。 */
+  attachVisemes(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) {
+      this.clearVisemes();
+      return;
+    }
+    this.visemeTimeline = timeline;
+    this.visemeStartedAt = performance.now();
+  }
+
+  clearVisemes() {
+    this.visemeTimeline = null;
+  }
+
+  _activeViseme(elapsedMs) {
+    const timeline = this.visemeTimeline;
+    if (!timeline) return null;
+    for (let i = 0; i < timeline.length; i += 1) {
+      const segment = timeline[i];
+      if (elapsedMs < segment.start_ms) return null;
+      if (elapsedMs <= segment.end_ms) return segment.viseme || null;
+    }
+    return null;
+  }
+
+  _analyserLevel() {
+    if (!this.analyser || !this.timeData) return 0;
+    this.analyser.getByteTimeDomainData(this.timeData);
+    let sum = 0;
+    for (let i = 0; i < this.timeData.length; i += 1) {
+      const value = (this.timeData[i] - 128) / 128;
+      sum += value * value;
+    }
+    const rms = Math.sqrt(sum / this.timeData.length);
+    return Math.max(0, Math.min(1, (rms - 0.012) * 6.5));
+  }
+
+  /** 无元音表情的模型：用下颌骨开合兜底（只能张嘴，不做元音形状区分）。 */
+  _paintMouth(dt, viseme, level) {
+    const factor = Math.min(1, dt * 18);
+    for (const key of VISEME_KEYS) {
+      const target = viseme === key ? 1 : 0;
+      this.visemeWeights[key] += (target - this.visemeWeights[key]) * factor;
+    }
+
+    if (this.mouthOpenMode === 'expression') {
+      const em = this.vrm?.expressionManager;
+      if (!em) return;
+      for (const key of VISEME_KEYS) {
+        const name = this.expressionByViseme[key];
+        if (!name) continue;
+        try {
+          em.setValue(name, Math.min(1, this.visemeWeights[key] * level));
+        } catch (_error) {
+          // 模型未定义该表情时忽略
+        }
+      }
+      return;
+    }
+
+    if (this.mouthOpenMode === 'jaw' && this.jawNode) {
+      let openness = 0;
+      for (const key of VISEME_KEYS) openness = Math.max(openness, this.visemeWeights[key]);
+      this.jawNode.rotation.x =
+        this.jawBaseRotationX + this.jawOpenSign * openness * level * JAW_MAX_OPEN;
+    }
+  }
+
+  _resetMouth() {
+    this.visemeTimeline = null;
+    this.mouthLevel = 0;
+    for (const key of VISEME_KEYS) this.visemeWeights[key] = 0;
+    const em = this.vrm?.expressionManager;
+    if (em) {
+      for (const key of VISEME_KEYS) {
+        const name = this.expressionByViseme[key];
+        if (!name) continue;
+        try {
+          em.setValue(name, 0);
+        } catch (_error) {
+          // ignore
+        }
+      }
+    }
+    if (this.jawNode) this.jawNode.rotation.x = this.jawBaseRotationX;
   }
 
   _updateMouth(dt) {
-    let target = 0;
-    if (this.analyser && this.timeData) {
-      this.analyser.getByteTimeDomainData(this.timeData);
-      let sum = 0;
-      for (let i = 0; i < this.timeData.length; i += 1) {
-        const value = (this.timeData[i] - 128) / 128;
-        sum += value * value;
-      }
-      const rms = Math.sqrt(sum / this.timeData.length);
-      target = Math.max(0, Math.min(1, (rms - 0.012) * 6.5));
+    let viseme = null;
+    let energyLevel = 0;
+    if (this.visemeTimeline) {
+      viseme = this._activeViseme(performance.now() - this.visemeStartedAt);
+    } else {
+      energyLevel = this._analyserLevel();
     }
+    const target = viseme ? VISEME_OPEN[viseme] ?? 0.7 : energyLevel;
+
     if (target > this.mouthLevel) {
       this.mouthLevel += (target - this.mouthLevel) * Math.min(1, dt * 18);
     } else {
       this.mouthLevel = Math.max(target, this.mouthLevel - dt * MOUTH_RELEASE);
     }
-    this._setMouth(this.mouthLevel);
+    this._paintMouth(dt, viseme, this.mouthLevel);
 
     const speaking = this.mouthLevel > 0.06;
     this.speaking = speaking;
@@ -1316,9 +1468,10 @@ export class KangbanAvatar {
       const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
       this.lastFrame = now;
       if (this.vrm && this.mixer) {
+        // 先跑动作（可能写下颌骨），再覆盖口型与眨眼，最后统一提交表达式
+        this.mixer.update(dt);
         this._updateMouth(dt);
         this._updateBlink(dt);
-        this.mixer.update(dt);
         this.vrm.update(dt);
       }
       this.renderer.render(this.scene, this.camera);

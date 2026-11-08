@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from app.integrations import ProviderUnavailable
 from app.models import Voiceprint
 from app.models.enums import VoiceprintStatus
 from app.services.voice import (
@@ -15,7 +16,6 @@ from app.services.voice import (
     load_room_voiceprints,
     template_reply,
 )
-from app.integrations import ProviderUnavailable
 
 FAKE_VEC_A = [1.0] + [0.0] * 191
 FAKE_VEC_B = [0.0, 1.0] + [0.0] * 190
@@ -288,10 +288,54 @@ async def test_enroll_rejects_missing_elder(fake_provider, seed, db_session):
         )
 
 
+async def test_enroll_skips_invalid_segment(fake_provider, seed, db_session, monkeypatch):
+    """单段不合格只作废该段：其余有效样本达 2 段仍可录入。"""
+    monkeypatch.setattr(
+        "app.services.voice.get_settings",
+        lambda: type(
+            "S", (), {"voiceprint_enroll_min_speech_seconds": 0.5, "sherpa_model_dir": "models"}
+        )(),
+    )
+    elder = seed["elders"]["single"]
+    record = await enroll_voiceprint(
+        db_session,
+        elder_id=elder.elder_id,
+        audio_samples=[
+            b"\x00\x00" * 16000 * 3,
+            b"\x00\x00" * 16000 * 3,
+            b"\x00\x00" * 160,  # 0.01 秒：假 Provider 直接判无效
+        ],
+    )
+    assert record.status == VoiceprintStatus.ACTIVE
+
+
+async def test_enroll_rejects_total_speech_below_minimum(
+    fake_provider, seed, db_session, monkeypatch
+):
+    """总有效语音不足：拒绝入库，提示补充时长。"""
+    monkeypatch.setattr(
+        "app.services.voice.get_settings",
+        lambda: type(
+            "S", (), {"voiceprint_enroll_min_speech_seconds": 3.0, "sherpa_model_dir": "models"}
+        )(),
+    )
+    elder = seed["elders"]["single"]
+    with pytest.raises(ValueError, match="有效语音合计"):
+        await enroll_voiceprint(
+            db_session,
+            elder_id=elder.elder_id,
+            audio_samples=[b"\x00\x00" * 8000, b"\x00\x00" * 8000],  # 各 0.5 秒
+        )
+
+
 async def test_load_room_voiceprints_filters_active(fake_provider, seed, db_session):
     """只取 active 声纹；revoked/expired 不参与匹配。"""
     elder = seed["elders"]["single"]
-    await enroll_voiceprint(db_session, elder_id=elder.elder_id, audio_samples=[b"\x00\x00" * 16000 * 3])
+    await enroll_voiceprint(
+        db_session,
+        elder_id=elder.elder_id,
+        audio_samples=[b"\x00\x00" * 16000 * 3],
+    )
     revoked = Voiceprint(
         elder_id=elder.elder_id,
         embedding=FAKE_VEC_B,
