@@ -31,6 +31,7 @@ class EdgeTTSProvider(TTSProvider):
         self.rate = rate
         self.last_first_byte_ms: float | None = None  # 最近一次合成首包延迟
         self.last_total_ms: float | None = None  # 最近一次合成总耗时
+        self.last_decode_ms: float | None = None  # 最近一次 MP3→PCM 解码耗时
 
     def sample_rate(self) -> int:
         return TARGET_RATE
@@ -40,6 +41,7 @@ class EdgeTTSProvider(TTSProvider):
 
         t0 = time.perf_counter()
         self.last_first_byte_ms = None
+        self.last_decode_ms = None
         mp3 = io.BytesIO()
         communicate = edge_tts.Communicate(text, self.voice, rate=self.rate)
         async for chunk in communicate.stream():
@@ -47,7 +49,9 @@ class EdgeTTSProvider(TTSProvider):
                 if self.last_first_byte_ms is None:
                     self.last_first_byte_ms = (time.perf_counter() - t0) * 1000
                 mp3.write(chunk["data"])
+        decode_started = time.perf_counter()
         pcm = await self._decode_mp3(mp3.getvalue())
+        self.last_decode_ms = (time.perf_counter() - decode_started) * 1000
         self.last_total_ms = (time.perf_counter() - t0) * 1000
         logger.info(
             "tts_synthesized",
@@ -55,6 +59,7 @@ class EdgeTTSProvider(TTSProvider):
                 "event": "tts_synthesized",
                 "tts_first_byte_ms": round(self.last_first_byte_ms or 0, 1),
                 "tts_total_ms": round(self.last_total_ms, 1),
+                "tts_decode_ms": round(self.last_decode_ms, 1),
                 "pcm_bytes": len(pcm),
                 "voice": self.voice,
             },

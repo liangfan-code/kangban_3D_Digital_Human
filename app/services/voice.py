@@ -52,6 +52,8 @@ from app.models import Elder, Voiceprint
 from app.models.enums import DeviceStatus, ElderStatus, IdentitySource, VoiceprintStatus
 from app.services import actions as action_service
 from app.services import context_summary, conversation_store
+from app.services.latency import TurnTrace
+from app.services.resilience import CircuitOpen, get_llm_breaker, get_tts_breaker
 from app.services.session_state import get_session_store
 from app.services.slot_extractor import extract_slots
 from app.services.viseme import build_viseme_timeline
@@ -761,10 +763,14 @@ class VoiceSession:
     # ---- 后续句：ASR → 模板回复 → TTS ----
 
     async def _handle_transcription(self, pcm: bytes) -> None:
+        trace = TurnTrace()
+        trace.set_meta("device_id", str(self.device_id))
+        trace.set_meta("elder_id", str(self.verified_elder_id) if self.verified_elder_id else None)
         asr: FunASRWSProvider
         try:
             asr = create_asr_session()
             await asr.start_session()
+            trace.mark("asr_ready")
         except ProviderUnavailable:
             await self.send_event(
                 {
@@ -827,6 +833,7 @@ class VoiceSession:
                     final_text = result.text
                     final_confidence = result.confidence
                     asr_e2e_ms = (time.perf_counter() - t0) * 1000
+                    trace.mark("asr_final")
                     logger.info(
                         "asr final",
                         extra={
@@ -845,14 +852,19 @@ class VoiceSession:
         if not final_text or not re.search(r"[\u4e00-\u9fff a-zA-Z0-9]", final_text):
             # 空文本或纯标点（如"。"）：视为没听清，不产生模板回复
             await self.send_event({"type": "done", "text": ""})
+            trace.degrade("empty_transcript")
+            trace.mark("done")
+            trace.log()
             return
 
-        reply = await self._reply_and_respond(final_text)
+        reply = await self._reply_and_respond(final_text, trace)
         await self.send_event({"type": "done", "text": final_text, "reply": reply})
+        trace.mark("done")
+        trace.log()
 
     # ---- Day4：回复链（LLM 流式分句为主，模板 + 规则动作为降级）----
 
-    async def _reply_and_respond(self, final_text: str) -> str:
+    async def _reply_and_respond(self, final_text: str, trace: TurnTrace | None = None) -> str:
         """终句 → 落库 → 回复生成 → 逐句 action/tts 事件；返回剥净标记的完整回复。
 
         LLM 未配置或失败时可见降级：模板回复 + 关键词规则动作（通话绝不中断）；
@@ -863,16 +875,25 @@ class VoiceSession:
         )
         if llm_is_configured():
             try:
-                return await self._reply_via_llm(final_text, identity)
+                return await self._reply_via_llm(final_text, identity, trace)
             except LlmUnavailable as exc:
+                if trace:
+                    trace.degrade("llm_fallback")
                 logger.warning(
                     "llm unavailable, fallback to template",
                     extra={"event": "llm_fallback", "error": str(exc)},
                 )
-        return await self._reply_via_template(final_text, identity)
+        return await self._reply_via_template(final_text, identity, trace)
 
-    async def _reply_via_llm(self, final_text: str, identity: IdentitySource) -> str:
+    async def _reply_via_llm(
+        self,
+        final_text: str,
+        identity: IdentitySource,
+        trace: TurnTrace | None = None,
+    ) -> str:
         thread_id, history = await self._load_context(identity)
+        if trace:
+            trace.set_meta("thread_id", str(thread_id) if thread_id else None)
         context_text = await self._prepare_state(thread_id, final_text)
         system_content = _build_system_prompt()
         if context_text:
@@ -883,12 +904,46 @@ class VoiceSession:
 
         assembler = _SentenceAssembler()
         clean_parts: list[str] = []
+        iterator = stream_chat(messages).__aiter__()
+        first = True
+        if trace:
+            trace.mark("llm_start")
         try:
-            async for delta in stream_chat(messages):
-                for sentence in assembler.feed(delta):
-                    clean_parts.append(await self._emit_sentence(sentence))
-            for sentence in assembler.finish():
-                clean_parts.append(await self._emit_sentence(sentence))
+            try:
+                async with get_llm_breaker().guard():
+                    while True:
+                        try:
+                            if first:
+                                delta = await asyncio.wait_for(
+                                    anext(iterator),
+                                    timeout=get_settings().llm_first_token_timeout_seconds,
+                                )
+                            else:
+                                delta = await anext(iterator)
+                        except StopAsyncIteration:
+                            break
+                        if first:
+                            first = False
+                            if trace:
+                                trace.mark("llm_first_token")
+                        for sentence in assembler.feed(delta):
+                            clean_parts.append(await self._emit_sentence(sentence, trace))
+                    for sentence in assembler.finish():
+                        clean_parts.append(await self._emit_sentence(sentence, trace))
+            except CircuitOpen as exc:
+                if trace:
+                    trace.degrade("llm_circuit_open")
+                raise LlmUnavailable(f"LLM 熔断中：{exc}") from exc
+            except TimeoutError as exc:
+                if trace:
+                    trace.degrade("llm_first_token_timeout")
+                raise LlmUnavailable("LLM 首 token 超时") from exc
+            finally:
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    await close()
+            if trace:
+                trace.mark("llm_end")
         except LlmUnavailable:
             partial = "".join(clean_parts).strip()
             if partial:  # 已播出一半：沿用部分回复，不再重说模板
@@ -901,21 +956,28 @@ class VoiceSession:
         await self._save_turn(thread_id, final_text, reply)
         return reply
 
-    async def _reply_via_template(self, final_text: str, identity: IdentitySource) -> str:
+    async def _reply_via_template(
+        self,
+        final_text: str,
+        identity: IdentitySource,
+        trace: TurnTrace | None = None,
+    ) -> str:
         thread_id, _ = await self._load_context(identity)
+        if trace:
+            trace.set_meta("thread_id", str(thread_id) if thread_id else None)
         await self._prepare_state(thread_id, final_text)
         marked = action_service.apply_reply_rules(template_reply(final_text))
-        reply = await self._emit_sentence(marked)
+        reply = await self._emit_sentence(marked, trace)
         await self._save_turn(thread_id, final_text, reply)
         return reply
 
-    async def _emit_sentence(self, sentence: str) -> str:
+    async def _emit_sentence(self, sentence: str, trace: TurnTrace | None = None) -> str:
         """剥动作标记 → 先发 action 事件（先于语音）→ 再合成发送该句。"""
         cleaned, acts = action_service.parse_action_markers(sentence)
         for action_id, param in acts:
             await self.send_event({"type": "action", "action": action_id, "param": param})
         if cleaned.strip():
-            await self._synthesize_and_send(cleaned)
+            await self._synthesize_and_send(cleaned, trace)
         return cleaned
 
     async def _load_context(
@@ -993,30 +1055,40 @@ class VoiceSession:
         except Exception:  # noqa: BLE001 —— 摘要失败保留旧内容，下一轮重试
             logger.exception("summary refresh failed")
 
-    async def _synthesize_and_send(self, text: str) -> None:
+    async def _synthesize_and_send(self, text: str, trace: TurnTrace | None = None) -> None:
         tts = get_tts_provider()
+        settings = get_settings()
+        if trace:
+            trace.mark_once("tts_start")
         try:
-            pcm = await tts.synthesize(text)
-        except Exception as exc:  # noqa: BLE001 —— TTS 失败可见降级，不中断会话
-            logger.warning(
-                "tts failed",
-                extra={"event": "tts_failed", "error": str(exc)},
-            )
-            await self.send_event(
-                {
-                    "type": "error",
-                    "code": "tts_failed",
-                    "message": "语音合成失败，已用文字回复",
-                    "reply_text": text,
-                }
-            )
+            async with get_tts_breaker().guard():
+                pcm = await asyncio.wait_for(
+                    tts.synthesize(text), timeout=settings.tts_timeout_seconds
+                )
+        except (CircuitOpen, TimeoutError) as exc:
+            if trace:
+                trace.degrade(
+                    "tts_circuit_open" if isinstance(exc, CircuitOpen) else "tts_timeout"
+                )
+            await self._send_tts_failure(text, exc)
             return
+        except Exception as exc:  # noqa: BLE001 —— TTS 失败可见降级，不中断会话
+            await self._send_tts_failure(text, exc)
+            return
+        if trace:
+            trace.set_duration_once("tts_first_byte_ms", getattr(tts, "last_first_byte_ms", None))
+            trace.set_duration_once("tts_decode_ms", getattr(tts, "last_decode_ms", None))
+            trace.add_duration("tts_total_ms", getattr(tts, "last_total_ms", None))
+            trace.incr("tts_sentences")
         # Day5.1：随 TTS 音频一起下发五口型时间轴；计算失败只丢口型，不阻断出声
+        viseme_started = time.perf_counter()
         try:
             visemes = build_viseme_timeline(pcm, tts.sample_rate())
         except Exception:  # noqa: BLE001
             logger.exception("viseme timeline build failed")
             visemes = []
+        if trace:
+            trace.add_duration("viseme_ms", (time.perf_counter() - viseme_started) * 1000)
         await self.send_event(
             {
                 "type": "tts",
@@ -1026,12 +1098,28 @@ class VoiceSession:
                 "visemes": visemes,
             }
         )
+        if trace:
+            trace.mark_once("tts_event_sent")
         # 回声防护窗：按本次音频播放时长 + 余量丢弃上行（前端播放期静音可能因
         # onended 不触发/AudioContext 挂起而漏窗，服务端必须自有防线）
         duration_ms = len(pcm) / (tts.sample_rate() * 2) * 1000  # int16 mono
         self._echo_guard_until = time.monotonic() + (
             duration_ms + TTS_ECHO_GUARD_EXTRA_MS
         ) / 1000
+
+    async def _send_tts_failure(self, text: str, exc: Exception) -> None:
+        logger.warning(
+            "tts failed",
+            extra={"event": "tts_failed", "error": str(exc)},
+        )
+        await self.send_event(
+            {
+                "type": "error",
+                "code": "tts_failed",
+                "message": "语音合成失败，已用文字回复",
+                "reply_text": text,
+            }
+        )
 
     # ---- Token 免验续期（前端可携带上次 token 重连）----
 

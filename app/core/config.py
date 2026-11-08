@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     llm_reasoning_effort: str | None = None
     llm_timeout_seconds: int = 30
     llm_max_retries: int = 1
+    # Day5.2：首 token 超时（秒）——超时即走模板降级，不阻塞整轮回复
+    llm_first_token_timeout_seconds: float = 6.0
 
     # ---- Embedding（后续 Optional）----
     embedding_provider: str | None = None
@@ -69,6 +71,8 @@ class Settings(BaseSettings):
     tts_base_url: str | None = None
     tts_voice_id: str | None = None
     tts_dialect: str | None = None
+    # Day5.2：单句合成超时（秒）——超时记 tts_failed 并显示文字
+    tts_timeout_seconds: float = 10.0
 
     # ---- 方言规范化（后续 Optional）----
     dialect_normalization_enabled: bool = False
@@ -102,6 +106,12 @@ class Settings(BaseSettings):
     # STUN/TURN JSON 数组字符串，如 [{"urls":"turn:x.x.x.x:3478","username":"u","credential":"p"}]；
     # 空=本地 host 候选。Day1 预留的 WEBRTC_STUN/TURN_* 字段保留，正式部署择一使用
     rtc_ice_servers: str | None = None
+
+    # ---- Day5.2 熔断（LLM / TTS，进程内独立计数）----
+    # 窗口内连续失败达到阈值即打开，冷却期内直接走降级、不再发起真实调用
+    breaker_failure_threshold: int = 3
+    breaker_window_seconds: int = 60
+    breaker_open_seconds: int = 30
 
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None

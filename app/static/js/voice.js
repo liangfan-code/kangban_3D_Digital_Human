@@ -163,7 +163,9 @@
     ttsQueue.push({
       bytes: bytes,
       rate: sampleRate || 16000,
-      visemes: Array.isArray(visemes) ? visemes : []
+      visemes: Array.isArray(visemes) ? visemes : [],
+      // Day5.2：前端播放起点观测（仅 console.debug，不上报服务端）
+      receivedAt: performance.now()
     });
     drainTts();
   }
@@ -205,6 +207,7 @@
     if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = false; });
     src.onended = unmute;
     setTimeout(unmute, (ch.length / item.rate) * 1000 + 800); // 播放时长+800ms 兜底
+    console.debug("[tts] play_start", performance.now() - item.receivedAt);
     src.start();
     // Day5.1：按该段音频的五口型时间轴驱动嘴部；无时间轴时引擎回落到能量分析
     if (window.KangbanAvatar && KangbanAvatar.attachVisemes) {
