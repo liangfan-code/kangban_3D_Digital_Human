@@ -249,3 +249,68 @@ async def test_nurse_revoke_building_scope_hidden(api, seed):
         f"/api/v1/elders/{seed['elders']['single'].elder_id}", headers=nurse
     )
     assert resp.status_code == 404
+
+
+async def _device_headers(db_session, device_id) -> dict:
+    """直接签发设备 Token（设备种子已 active），避免重复走注册流。"""
+    from app.auth.device_token import issue_access_token
+
+    issued = await issue_access_token(db_session, device_id)
+    await db_session.commit()
+    return {"Authorization": f"Bearer {issued.access_token}"}
+
+
+async def test_device_token_on_elder_endpoints_403(api, seed, db_session):
+    """人/设备 Token 互斥：设备身份访问长者接口一律 403。"""
+    headers = await _device_headers(db_session, seed["devices"]["single"].device_id)
+    resp = await api.get("/api/v1/elders", headers=headers)
+    assert resp.status_code == 403
+    resp = await api.get(
+        f"/api/v1/elders/{seed['elders']['single'].elder_id}", headers=headers
+    )
+    assert resp.status_code == 403
+
+
+async def test_admin_update_or_delete_unknown_elder_404(api, seed):
+    import uuid
+
+    token = {"Authorization": f"Bearer {await login(api, 'admin', seed['password'])}"}
+    unknown = uuid.uuid4()
+    resp = await api.put(f"/api/v1/elders/{unknown}", json={"name": "查无此人"}, headers=token)
+    assert resp.status_code == 404
+    resp = await api.delete(f"/api/v1/elders/{unknown}", headers=token)
+    assert resp.status_code == 404
+
+
+async def test_admin_update_elder_persona_validation_422(api, seed):
+    """更新人设：停用/不存在都必须 422（不落库）。"""
+    import uuid
+
+    token = {"Authorization": f"Bearer {await login(api, 'admin', seed['password'])}"}
+    elder = seed["elders"]["single"]
+    resp = await api.put(
+        f"/api/v1/elders/{elder.elder_id}",
+        json={"persona_id": str(seed["personas"]["off"].persona_id)},
+        headers=token,
+    )
+    assert resp.status_code == 422
+    resp = await api.put(
+        f"/api/v1/elders/{elder.elder_id}",
+        json={"persona_id": str(uuid.uuid4())},
+        headers=token,
+    )
+    assert resp.status_code == 422
+
+
+async def test_admin_update_elder_name_only_200(api, seed, db_session):
+    """只改姓名不碰床位：不做床位校验，正常 200。"""
+    token = {"Authorization": f"Bearer {await login(api, 'admin', seed['password'])}"}
+    elder = seed["elders"]["single"]
+    resp = await api.put(
+        f"/api/v1/elders/{elder.elder_id}", json={"name": "王奶奶"}, headers=token
+    )
+    assert resp.status_code == 200, resp.text
+    row = (
+        await db_session.execute(select(Elder).where(Elder.elder_id == elder.elder_id))
+    ).scalar_one()
+    assert row.name == "王奶奶"

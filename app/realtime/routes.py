@@ -10,11 +10,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.auth.dependencies import get_current_device
-from app.realtime.session import RealtimeRegistry, RtcAnswerOut, RtcOfferIn, VoiceRealtimeSession
+from app.realtime.session import RtcAnswerOut, RtcOfferIn, VoiceRealtimeSession, realtime_registry
 
 router = APIRouter(tags=["realtime"])
-
-_registry = RealtimeRegistry()
 
 
 @router.post("/rtc/offer", response_model=RtcAnswerOut)
@@ -25,5 +23,5 @@ async def rtc_offer(
     """SDP offer → answer；设备身份建立实时会话上下文。"""
     session = VoiceRealtimeSession(device_id)
     answer = await session.accept_offer(payload.sdp, payload.type)
-    await _registry.replace(device_id, session)
+    await realtime_registry.replace(device_id, session)
     return answer

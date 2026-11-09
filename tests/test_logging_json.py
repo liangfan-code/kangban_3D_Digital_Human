@@ -48,6 +48,20 @@ def test_circuit_and_provider_fields_are_serialized():
     assert payload["failure_threshold"] == 3
 
 
+def test_tool_loop_guard_fields_are_serialized():
+    """死循环防护字段必须可见，否则熔断无法排障。"""
+    payload = _format(
+        event="tool_loop_guard_tripped",
+        tool_name="play_media",
+        call_count=3,
+        reason="duplicate_calls",
+    )
+    assert payload["event"] == "tool_loop_guard_tripped"
+    assert payload["tool_name"] == "play_media"
+    assert payload["call_count"] == 3
+    assert payload["reason"] == "duplicate_calls"
+
+
 def test_unlisted_extra_is_not_serialized():
     """白名单外字段（如误传正文）不得进入 JSON 日志，守住隐私边界。"""
     payload = _format(event="turn_latency", raw_text="不该出现的转写正文")

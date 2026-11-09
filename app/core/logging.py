@@ -82,6 +82,10 @@ class JsonFormatter(logging.Formatter):
             "pcm_bytes",
             "voice",
             "error",
+            # Day5.4 死循环防护（tool_loop_guard）：只记 Tool 名称/次数/原因
+            "tool_name",
+            "call_count",
+            "reason",
         ):
             value = getattr(record, key, None)
             if value is not None:

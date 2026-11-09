@@ -47,7 +47,7 @@ async def create_elder_route(
         elder = await create_elder(session, body, actor)
     except ElderValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     except ElderConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -79,12 +79,15 @@ async def update_elder_route(
     session: AsyncSession = Depends(get_session),
 ) -> ElderResponse:
     """更新长者档案（仅管理员）。"""
-    elder = await get_elder_for_user(session, actor, elder_id)  # 管理员恒过；不存在 404
+    try:
+        elder = await get_elder_for_user(session, actor, elder_id)  # 管理员恒过；不存在 404
+    except ElderNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     try:
         elder = await update_elder(session, elder, body, actor)
     except ElderValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     except ElderConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
