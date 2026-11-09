@@ -36,6 +36,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from websockets.exceptions import WebSocketException
 
+from app.agent.companion import AgentResult, AgentUnavailable, looks_multi_intent
+from app.agent.companion import respond as agent_respond
+from app.agent.tools import ToolContext, ToolResult, build_default_registry
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.integrations import (
@@ -50,13 +53,18 @@ from app.integrations.llm import is_configured as llm_is_configured
 from app.integrations.sherpa_voiceprint import SherpaVoiceprintProvider
 from app.models import Elder, Voiceprint
 from app.models.enums import DeviceStatus, ElderStatus, IdentitySource, VoiceprintStatus
+from app.router.executor import execute_rule, safety_reply
+from app.router.schemas import RouteDecision, RouteLayer
+from app.router.service import route_text
 from app.services import actions as action_service
 from app.services import context_summary, conversation_store
+from app.services.hitl import hitl_queue
 from app.services.latency import TurnTrace
 from app.services.resilience import CircuitOpen, get_llm_breaker, get_tts_breaker
 from app.services.session_state import get_session_store
 from app.services.slot_extractor import extract_slots
 from app.services.viseme import build_viseme_timeline
+from app.system_one.questions import CLARIFY_QUESTION
 
 logger = get_logger(__name__)
 
@@ -140,6 +148,91 @@ def _build_system_prompt() -> str:
     persona = _load_persona()
     action_prompt = action_service.build_action_prompt()
     return persona + ("\n\n" + action_prompt if action_prompt else "")
+
+
+def _apply_route_trace(trace: TurnTrace | None, decision: RouteDecision) -> None:
+    """把路由判定写进本轮结构化日志（只记层级/意图/敏感标记，不记原文）。"""
+    if trace is None:
+        return
+    trace.set_meta("route_layer", decision.layer.value)
+    trace.set_meta("intent", decision.intent.value)
+    trace.set_meta("rule_id", decision.rule_id)
+    trace.set_meta("is_sensitive", "true" if decision.is_sensitive else "false")
+    trace.set_meta("is_private", "true" if decision.is_private else "false")
+    trace.set_meta("sensitive_category", decision.sensitive_category)
+    trace.set_meta("escalated_to_agent", "true" if decision.escalated_to_agent else "false")
+    if decision.confidence is not None:
+        trace.set_meta("route_confidence", f"{decision.confidence:.3f}")
+
+
+async def _call_tool(
+    name: str,
+    args: dict[str, str],
+    ctx: ToolContext,
+    trace: TurnTrace | None = None,
+) -> ToolResult:
+    """执行一次 Tool；只记工具名与 MCP 次数，不记参数内容。"""
+    result = await build_default_registry().call(name, args, ctx)
+    if trace:
+        trace.set_meta("tool_calls", name)
+        trace.set_meta("mcp_calls", "1" if name == "weather_get" else "0")
+    return result
+
+
+def _enqueue_sensitive(
+    text: str,
+    category: str | None,
+    elder_id: UUID | None,
+    device_id: str,
+    trace: TurnTrace | None = None,
+) -> None:
+    """敏感事件只入内存队列，日志只留类别，不写长者原文。"""
+    hitl_queue.enqueue(
+        kind="sensitive",
+        summary=category or "敏感事件",
+        elder_id=str(elder_id) if elder_id else None,
+        device_id=device_id,
+        detail=text,
+    )
+    if trace:
+        trace.set_meta("hitl_enqueued", "true")
+
+
+async def _run_agent(
+    text: str,
+    tool_ctx: ToolContext,
+    history: list,
+    context_text: str | None,
+    trace: TurnTrace | None = None,
+) -> AgentResult | None:
+    """多意图才进主控 Agent；不可用/失败返回 None，由上层回落流式 LLM。"""
+    if not (looks_multi_intent(text) and llm_is_configured()):
+        return None
+    if trace:
+        trace.set_meta("llm_called", "true")
+    try:
+        result = await agent_respond(
+            text,
+            system_prompt=_build_system_prompt(),
+            ctx=tool_ctx,
+            history=history,
+            context_text=context_text,
+        )
+    except AgentUnavailable as exc:
+        if trace:
+            trace.degrade("agent_fallback")
+        logger.warning(
+            "agent unavailable, fallback to llm",
+            extra={"event": "agent_fallback", "error": str(exc)},
+        )
+        return None
+    if trace:
+        trace.set_meta("agent_steps", str(result.steps))
+        trace.set_meta("tool_calls", ",".join(result.tool_names))
+        trace.set_meta("mcp_calls", str(result.tool_names.count("weather_get")))
+        if result.degraded:
+            trace.degrade(result.degraded)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -294,34 +387,77 @@ async def generate_text_reply(
     trace.set_meta("thread_id", str(thread_id) if thread_id else None)
     context_text = await _prepare_turn_state(thread_id, text)
 
-    collected: list[str] = []
-    if llm_is_configured():
-        system_content = _build_system_prompt()
-        if context_text:
-            system_content = system_content + "\n\n" + context_text
-        messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
-        messages += [{"role": m.role, "content": m.content} for m in history]
-        messages.append({"role": "user", "content": text})
-        try:
-            await _collect_llm_sentences(messages, collected, trace=trace)
-        except LlmUnavailable as exc:
-            trace.degrade("llm_fallback")
-            logger.warning(
-                "text llm unavailable, fallback to template",
-                extra={"event": "llm_fallback", "error": str(exc)},
-            )
-        except Exception as exc:  # noqa: BLE001 —— 模型侧异常不向长者抛 5xx
-            trace.degrade("llm_error")
-            logger.exception(
-                "text llm error, fallback to template",
-                extra={"event": "llm_fallback", "error": str(exc)},
-            )
-    else:
-        trace.degrade("llm_not_configured")
+    # Day6：文字/语音双通道共用三级路由判定
+    decision = route_text(text)
+    _apply_route_trace(trace, decision)
+    trace.set_meta("llm_called", "false")
+    tool_ctx = ToolContext(
+        elder_id=str(elder_id) if elder_id else None, device_id=str(device_id)
+    )
 
-    reply = "".join(collected).strip()
-    if not reply:
-        reply = action_service.parse_action_markers(template_reply(text))[0]
+    reply: str | None = None
+    if decision.layer is RouteLayer.SAFETY:
+        _enqueue_sensitive(text, decision.sensitive_category, elder_id, str(device_id), trace)
+        reply = safety_reply(decision.sensitive_category)
+    elif decision.layer is RouteLayer.RULE:
+        outcome = execute_rule(decision)
+        if outcome is not None and outcome.reply:
+            reply = outcome.reply
+        elif decision.tool:
+            result = await _call_tool(decision.tool, decision.tool_args, tool_ctx, trace)
+            reply = result.content
+            if not result.ok:
+                trace.degrade(result.degraded or "tool_unavailable")
+    elif decision.layer in (RouteLayer.CLASSIFIER, RouteLayer.AGENT):
+        # 多意图必须先于低置信澄清：否则「吃完药放戏再告诉我儿子」会被反问截断
+        agent_result = await _run_agent(
+            text, tool_ctx, history, context_text, trace
+        )
+        if agent_result is not None:
+            reply = agent_result.text
+        elif decision.layer is RouteLayer.CLASSIFIER:
+            if decision.needs_clarification:
+                reply = CLARIFY_QUESTION
+            elif decision.tool:
+                result = await _call_tool(decision.tool, decision.tool_args, tool_ctx, trace)
+                reply = result.content
+                if not result.ok:
+                    trace.degrade(result.degraded or "tool_unavailable")
+            elif decision.action:
+                outcome = execute_rule(decision)
+                reply = outcome.reply if outcome else None
+
+    if reply is None:
+        collected: list[str] = []
+        if llm_is_configured():
+            trace.set_meta("llm_called", "true")
+            system_content = _build_system_prompt()
+            if context_text:
+                system_content = system_content + "\n\n" + context_text
+            messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
+            messages += [{"role": m.role, "content": m.content} for m in history]
+            messages.append({"role": "user", "content": text})
+            try:
+                await _collect_llm_sentences(messages, collected, trace=trace)
+            except LlmUnavailable as exc:
+                trace.degrade("llm_fallback")
+                logger.warning(
+                    "text llm unavailable, fallback to template",
+                    extra={"event": "llm_fallback", "error": str(exc)},
+                )
+            except Exception as exc:  # noqa: BLE001 —— 模型侧异常不向长者抛 5xx
+                trace.degrade("llm_error")
+                logger.exception(
+                    "text llm error, fallback to template",
+                    extra={"event": "llm_fallback", "error": str(exc)},
+                )
+        else:
+            trace.degrade("llm_not_configured")
+
+        reply = "".join(collected).strip()
+        if not reply:
+            reply = action_service.parse_action_markers(template_reply(text))[0]
+
     await _persist_turn(db, thread_id, text, reply)
     trace.mark("done")
     trace.log(event="text_latency")
@@ -758,6 +894,8 @@ class VoiceSession:
         self.closed = False
         # 早期摘要后台任务：同一会话同时只允许一个，关闭时取消
         self._summary_task: asyncio.Task | None = None
+        # Day6.1：「重复一遍」规则复用上一轮已播内容，不调任何模型
+        self._last_reply: str | None = None
 
     # ---- 音频入口（realtime 推入，16k mono int16 PCM 60ms 帧）----
 
@@ -1051,17 +1189,104 @@ class VoiceSession:
     # ---- Day4：回复链（LLM 流式分句为主，模板 + 规则动作为降级）----
 
     async def _reply_and_respond(self, final_text: str, trace: TurnTrace | None = None) -> str:
-        """终句 → 落库 → 回复生成 → 逐句 action/tts 事件；返回剥净标记的完整回复。
+        """终句 → 路由/落库 → 回复生成 → 逐句 action/tts 事件。
 
-        LLM 未配置或失败时可见降级：模板回复 + 关键词规则动作（通话绝不中断）；
-        LLM 已产出部分句子后中断，则沿用已说部分，不重复补模板。
+        Day6.1 路由顺序：安全一票否决 → 规则层 →（后续）分类器 → 主控 Agent/LLM。
+        安全命中只播预设安抚话术；规则命中直接执行，不调任何模型。
+        LLM 未配置或失败时仍可见降级为模板回复；已产出部分句子后中断则沿用部分。
         """
         identity = (
             IdentitySource.VOICEPRINT if self.verified_elder_id else IdentitySource.ANONYMOUS
         )
+        thread_id, history = await self._load_context(identity)
+        if trace:
+            trace.set_meta("thread_id", str(thread_id) if thread_id else None)
+        context_text = await self._prepare_state(thread_id, final_text)
+
+        decision = route_text(final_text)
+        _apply_route_trace(trace, decision)
+        if trace:
+            trace.set_meta("llm_called", "false")
+
+        tool_ctx = ToolContext(
+            elder_id=str(self.verified_elder_id) if self.verified_elder_id else None,
+            device_id=str(self.device_id),
+        )
+
+        if decision.layer is RouteLayer.SAFETY:
+            _enqueue_sensitive(
+                final_text,
+                decision.sensitive_category,
+                self.verified_elder_id,
+                str(self.device_id),
+                trace,
+            )
+            reply = safety_reply(decision.sensitive_category)
+            await self._emit_sentence(reply, trace)
+            await self._save_turn(thread_id, final_text, reply)
+            self._last_reply = reply
+            return reply
+
+        if decision.layer is RouteLayer.RULE:
+            outcome = execute_rule(decision)
+            if outcome is None and decision.action == "repeat" and self._last_reply:
+                # 「重复一遍」：复用上一轮已播内容，不调模型
+                await self._emit_sentence(self._last_reply, trace)
+                return self._last_reply
+            if outcome is not None:
+                for event in outcome.events:
+                    await self.send_event(dict(event))
+                if outcome.reply:
+                    await self._emit_sentence(outcome.reply, trace)
+                await self._save_turn(thread_id, final_text, outcome.reply)
+                self._last_reply = outcome.reply
+                return outcome.reply
+            if decision.tool:
+                result = await _call_tool(decision.tool, decision.tool_args, tool_ctx, trace)
+                return await self._respond_with_tool(result, thread_id, final_text, trace)
+
+        if decision.layer in (RouteLayer.CLASSIFIER, RouteLayer.AGENT):
+            # 多意图先于低置信澄清，避免组合请求被反问截断
+            agent_result = await _run_agent(
+                final_text, tool_ctx, history, context_text, trace
+            )
+            if agent_result is not None:
+                for event in agent_result.client_events:
+                    await self.send_event(dict(event))
+                reply = await self._emit_text(agent_result.text, trace)
+                await self._save_turn(thread_id, final_text, reply)
+                self._last_reply = reply
+                return reply
+
+        if decision.layer is RouteLayer.CLASSIFIER:
+            if decision.needs_clarification:
+                reply = CLARIFY_QUESTION
+                await self._emit_sentence(reply, trace)
+                await self._save_turn(thread_id, final_text, reply)
+                self._last_reply = reply
+                return reply
+            if decision.tool:
+                result = await _call_tool(decision.tool, decision.tool_args, tool_ctx, trace)
+                return await self._respond_with_tool(result, thread_id, final_text, trace)
+            if decision.action:
+                outcome = execute_rule(decision)
+                if outcome is not None:
+                    for event in outcome.events:
+                        await self.send_event(dict(event))
+                    await self._emit_sentence(outcome.reply, trace)
+                    await self._save_turn(thread_id, final_text, outcome.reply)
+                    self._last_reply = outcome.reply
+                    return outcome.reply
+
         if llm_is_configured():
+            if trace:
+                trace.set_meta("llm_called", "true")
             try:
-                return await self._reply_via_llm(final_text, identity, trace)
+                reply = await self._reply_via_llm(
+                    final_text, history, context_text, thread_id, trace
+                )
+                self._last_reply = reply
+                return reply
             except LlmUnavailable as exc:
                 if trace:
                     trace.degrade("llm_fallback")
@@ -1069,18 +1294,18 @@ class VoiceSession:
                     "llm unavailable, fallback to template",
                     extra={"event": "llm_fallback", "error": str(exc)},
                 )
-        return await self._reply_via_template(final_text, identity, trace)
+        reply = await self._reply_via_template(final_text, thread_id, trace)
+        self._last_reply = reply
+        return reply
 
     async def _reply_via_llm(
         self,
         final_text: str,
-        identity: IdentitySource,
+        history: list,
+        context_text: str | None,
+        thread_id: UUID | None,
         trace: TurnTrace | None = None,
     ) -> str:
-        thread_id, history = await self._load_context(identity)
-        if trace:
-            trace.set_meta("thread_id", str(thread_id) if thread_id else None)
-        context_text = await self._prepare_state(thread_id, final_text)
         system_content = _build_system_prompt()
         if context_text:
             system_content = system_content + "\n\n" + context_text
@@ -1111,17 +1336,36 @@ class VoiceSession:
     async def _reply_via_template(
         self,
         final_text: str,
-        identity: IdentitySource,
+        thread_id: UUID | None,
         trace: TurnTrace | None = None,
     ) -> str:
-        thread_id, _ = await self._load_context(identity)
-        if trace:
-            trace.set_meta("thread_id", str(thread_id) if thread_id else None)
-        await self._prepare_state(thread_id, final_text)
         marked = action_service.apply_reply_rules(template_reply(final_text))
         reply = await self._emit_sentence(marked, trace)
         await self._save_turn(thread_id, final_text, reply)
         return reply
+
+    async def _respond_with_tool(
+        self,
+        result: ToolResult,
+        thread_id: UUID | None,
+        final_text: str,
+        trace: TurnTrace | None = None,
+    ) -> str:
+        """把 Tool 结果转成一帧控制事件 + 一句可朗读回复，并落库本轮。"""
+        for event in result.client_events:
+            await self.send_event(dict(event))
+        if not result.ok and trace:
+            trace.degrade(result.degraded or "tool_unavailable")
+        await self._emit_sentence(result.content, trace)
+        await self._save_turn(thread_id, final_text, result.content)
+        self._last_reply = result.content
+        return result.content
+
+    async def _emit_text(self, text: str, trace: TurnTrace | None = None) -> str:
+        """把 Agent 的整段回复按句切开，逐句走 action/tts，保证首句尽快出声。"""
+        parts = [part for part in re.split(r"(?<=[。！？；!?;\n…])", text) if part.strip()]
+        cleaned = [await self._emit_sentence(part, trace) for part in parts]
+        return "".join(cleaned).strip()
 
     async def _emit_sentence(self, sentence: str, trace: TurnTrace | None = None) -> str:
         """剥动作标记 → 先发 action 事件（先于语音）→ 再合成发送该句。"""

@@ -101,6 +101,48 @@ async def test_unconfigured_llm_falls_back_to_template(monkeypatch):
     assert events[1]["text"] == "你刚才说的是：你好"
 
 
+async def test_rule_hit_skips_llm_and_emits_control(monkeypatch):
+    """Day6.1：规则命中直接执行，不调任何模型。"""
+    events: list[dict] = []
+    session = make_session(events)
+    calls = {"n": 0}
+
+    async def fake_stream(messages, **kwargs):
+        calls["n"] += 1
+        yield "不该出现。"
+        return
+
+    monkeypatch.setattr("app.services.voice.llm_is_configured", lambda: True)
+    monkeypatch.setattr("app.services.voice.stream_chat", fake_stream)
+
+    reply = await session._reply_and_respond("停")
+    assert reply == "好，我停下了。"
+    assert calls["n"] == 0
+    assert [e["type"] for e in events] == ["control", "tts"]
+    assert events[0]["action"] == "stop"
+
+
+async def test_safety_hit_skips_llm_and_uses_preset(monkeypatch):
+    """Day6.1：安全一票否决先于规则与模型，只播预设安抚话术。"""
+    events: list[dict] = []
+    session = make_session(events)
+    calls = {"n": 0}
+
+    async def fake_stream(messages, **kwargs):
+        calls["n"] += 1
+        yield "不该出现。"
+        return
+
+    monkeypatch.setattr("app.services.voice.llm_is_configured", lambda: True)
+    monkeypatch.setattr("app.services.voice.stream_chat", fake_stream)
+
+    reply = await session._reply_and_respond("我胸口疼")
+    assert reply.startswith("我听到您不舒服")
+    assert "病" not in reply
+    assert calls["n"] == 0
+    assert [e["type"] for e in events] == ["tts"]
+
+
 async def test_llm_start_failure_falls_back_to_template(monkeypatch):
     events: list[dict] = []
     session = make_session(events)
@@ -112,8 +154,8 @@ async def test_llm_start_failure_falls_back_to_template(monkeypatch):
     monkeypatch.setattr("app.services.voice.llm_is_configured", lambda: True)
     monkeypatch.setattr("app.services.voice.stream_chat", fake_stream)
 
-    reply = await session._reply_and_respond("再见")
-    assert reply == "你刚才说的是：再见"
+    reply = await session._reply_and_respond("你好")
+    assert reply == "你刚才说的是：你好"
     assert [e["type"] for e in events] == ["action", "tts"]
 
 

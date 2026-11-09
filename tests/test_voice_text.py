@@ -57,13 +57,13 @@ async def test_text_chat_single_room_cascades_elder(api, seed):
     token = await _device_token(api, seed, "single")
     resp = await api.post(
         "/api/v1/voice/text",
-        json={"text": "今天天气怎么样"},
+        json={"text": "你陪我聊聊天吧"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["elder_id"] == str(seed["elders"]["single"].elder_id)
-    assert body["reply"] == "你刚才说的是：今天天气怎么样"
+    assert body["reply"] == "你刚才说的是：你陪我聊聊天吧"
     assert body["degraded"] is True
 
 
@@ -95,7 +95,7 @@ async def test_text_chat_uses_llm_and_persists_turn(api, seed, monkeypatch, db_s
     """LLM 已配置：流式增量拼成整句返回，并把这一轮写入会话线程。"""
 
     async def fake_stream(messages):
-        assert messages[-1]["content"] == "今天天气怎么样"
+        assert messages[-1]["content"] == "你陪我聊聊天吧"
         yield "今天"
         yield "天气不错。"
 
@@ -105,7 +105,7 @@ async def test_text_chat_uses_llm_and_persists_turn(api, seed, monkeypatch, db_s
     token = await _device_token(api, seed, "single")
     resp = await api.post(
         "/api/v1/voice/text",
-        json={"text": "今天天气怎么样"},
+        json={"text": "你陪我聊聊天吧"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200, resp.text
@@ -116,13 +116,40 @@ async def test_text_chat_uses_llm_and_persists_turn(api, seed, monkeypatch, db_s
     rows = (
         await db_session.execute(
             select(ConversationMessage)
-            .where(ConversationMessage.content.in_(["今天天气怎么样", "今天天气不错。"]))
+            .where(ConversationMessage.content.in_(["你陪我聊聊天吧", "今天天气不错。"]))
             .order_by(ConversationMessage.seq)
         )
     ).scalars().all()
     assert [r.role for r in rows] == ["user", "assistant"]
-    assert rows[0].content == "今天天气怎么样"
+    assert rows[0].content == "你陪我聊聊天吧"
     assert rows[1].content == "今天天气不错。"
+
+
+async def test_multi_intent_preempts_clarification(api, seed, monkeypatch):
+    """组合请求走主控 Agent，不能被「低置信→反问」截断（大纲 6.3 验收项）。"""
+    from app.agent.companion import AgentResult
+
+    async def fake_agent(text, **kwargs):
+        assert "放戏" in text
+        return AgentResult(
+            text="先记着吃药，再给您放戏，最后告诉您儿子。",
+            tool_names=["medication_query", "media_play", "notify_family"],
+            steps=2,
+        )
+
+    monkeypatch.setattr("app.services.voice.llm_is_configured", lambda: True)
+    monkeypatch.setattr("app.services.voice.agent_respond", fake_agent)
+
+    token = await _device_token(api, seed, "single")
+    resp = await api.post(
+        "/api/v1/voice/text",
+        json={"text": "吃完药放戏再告诉我儿子"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reply"] == "先记着吃药，再给您放戏，最后告诉您儿子。"
+    assert body["reply"] != "您是想聊聊天，还是想听段戏或者查查天气？"
 
 
 async def test_text_chat_llm_failure_falls_back_to_template(api, seed, monkeypatch):

@@ -86,6 +86,21 @@ class JsonFormatter(logging.Formatter):
             "tool_name",
             "call_count",
             "reason",
+            # Day6 三级路由：只记层级/意图/置信度/降级类型，不记长者原文
+            "route_layer",
+            "intent",
+            "route_confidence",
+            "is_sensitive",
+            "is_private",
+            "sensitive_category",
+            "rule_id",
+            "escalated_to_agent",
+            "llm_called",
+            "hitl_enqueued",
+            "classifier_ms",
+            "agent_steps",
+            "tool_calls",
+            "mcp_calls",
         ):
             value = getattr(record, key, None)
             if value is not None:

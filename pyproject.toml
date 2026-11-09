@@ -20,6 +20,7 @@ dependencies = [
     "sherpa-onnx>=2.0.1",
     "numpy>=2.5.4",
     "edge-tts>=7.3.1",
+    "mcp>=1.9,<3",
 ]
 
 [project.optional-dependencies]

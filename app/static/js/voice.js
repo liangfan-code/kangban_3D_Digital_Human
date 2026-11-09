@@ -23,6 +23,7 @@
   var lastVoiceToken = null; // verification 通过后下发，重连时 resume 免验
   var audioCtx = null, ttsQueue = [], ttsPlaying = false;
   var avatarDest = null; // Day4 口型桥：TTS → MediaStreamDestination → 3D 数字人
+  var currentSrc = null, gainNode = null, volumeGain = 1; // Day6.1：规则层 control 事件
   var connected = false;
 
   function setStatus(text, cls) {
@@ -118,6 +119,9 @@
         appendLog(logReply, "🔊 " + ev.text, "r");
         playTts(ev.audio, ev.sample_rate, ev.visemes);
         break;
+      case "control":
+        handleControl(ev);
+        break;
       case "done":
         if (!ev.text) { setStatus("没有听清，请再说一次", "warn"); }
         else setStatus("本轮完成，请继续说话", "ok");
@@ -155,6 +159,36 @@
     }
   }
 
+  // ---------- 规则层 control 事件（Day6.1：停/音量/换段/点播）----------
+  function handleControl(ev) {
+    var action = ev.action;
+    if (action === "stop") {
+      ttsQueue.length = 0;
+      if (currentSrc) {
+        try { currentSrc.stop(); } catch (e) { /* 已结束 */ }
+        currentSrc = null;
+      }
+      if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
+      if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = true; });
+      ttsPlaying = false;
+      appendLog(logReply, "⏹ 已停止播放", "");
+      return;
+    }
+    if (action === "volume_up" || action === "volume_down") {
+      volumeGain = Math.min(1.8, Math.max(0.3, volumeGain + (action === "volume_up" ? 0.2 : -0.2)));
+      if (gainNode) gainNode.gain.value = volumeGain;
+      appendLog(logReply, "🔉 音量 " + Math.round(volumeGain * 100) + "%", "");
+      return;
+    }
+    if (action === "media_next") {
+      appendLog(logReply, "🎵 换一段（媒体播放 Day7 接入）", "");
+      return;
+    }
+    if (action === "media_play") {
+      appendLog(logReply, "🎵 点播：" + (ev.genre || "戏曲") + "（媒体播放 Day7 接入）", "");
+    }
+  }
+
   // ---------- TTS 播放（base64 16k PCM + viseme 时间轴 → AudioContext）----------
   function playTts(base64Pcm, sampleRate, visemes) {
     var bin = atob(base64Pcm);
@@ -181,7 +215,14 @@
     for (var i = 0; i < ch.length; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
     var src = audioCtx.createBufferSource();
     src.buffer = buf;
-    src.connect(audioCtx.destination);
+    // Day6.1：统一经过 GainNode，「大声点/小声点」规则即时生效
+    if (!gainNode) {
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = volumeGain;
+      gainNode.connect(audioCtx.destination);
+    }
+    src.connect(gainNode);
+    currentSrc = src;
     // Day4 口型桥：老师引擎吃 WebRTC 远端流（AnalyserNode），本项目 TTS 走本地
     // AudioContext——用 MediaStreamDestination 把播放流喂给引擎（与扬声出声并行）。
     // 引擎未就绪则跳过，不影响出声（降级底线）。
@@ -202,6 +243,7 @@
       if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
       if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = true; });
       ttsPlaying = false;
+      if (currentSrc === src) currentSrc = null;
       drainTts();
     }
     if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = false; });

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import admin, auth, devices, elders, health, health_profile, voice
+from app.api.routes import admin, auth, devices, elders, health, health_profile, hitl, voice
 from app.realtime.routes import router as realtime_router
 
 api_router = APIRouter()
@@ -20,4 +20,5 @@ api_router.include_router(health_profile.nurse_router, prefix="/api/v1")
 api_router.include_router(health_profile.admin_router, prefix="/api/v1")
 api_router.include_router(health_profile.config_router, prefix="/api/v1")
 api_router.include_router(voice.router, prefix="/api/v1")  # Day3 语音：WS + enroll
+api_router.include_router(hitl.router, prefix="/api/v1")  # Day6.3 HITL 待确认队列
 api_router.include_router(realtime_router, prefix="/api/v1")  # Day3 WebRTC 信令

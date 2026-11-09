@@ -29,15 +29,16 @@ def is_configured() -> bool:
     return bool(s.llm_api_key and s.llm_base_url and s.llm_model)
 
 
-async def complete_chat(
-    messages: list[dict[str, str]],
+async def complete_chat_message(
+    messages: list[dict],
     *,
+    tools: list[dict] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     max_tokens: int | None = None,
-) -> str:
-    """非流式调用 chat/completions，返回完整正文（用于早期摘要等后台任务）。
+) -> dict:
+    """非流式调用 chat/completions，返回 assistant message（可含 tool_calls）。
 
-    与流式版本共用配置与鉴权头；失败统一抛 LlmUnavailable，由调用方软降级。
+    供主控 Agent 的 ReAct 循环使用；``complete_chat`` 保持「只取文本」契约。
     """
     s = get_settings()
     if not is_configured():
@@ -48,6 +49,8 @@ async def complete_chat(
         body["reasoning_effort"] = s.llm_reasoning_effort
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    if tools:
+        body["tools"] = tools
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=s.llm_timeout_seconds, transport=transport) as client:
@@ -74,7 +77,23 @@ async def complete_chat(
     choices = payload.get("choices") or []
     if not choices:
         raise LlmUnavailable("LLM 响应缺少 choices")
-    content = (choices[0].get("message") or {}).get("content")
+    message = choices[0].get("message") or {}
+    if not message.get("content") and not message.get("tool_calls"):
+        raise LlmUnavailable("LLM 空回复")
+    return message
+
+
+async def complete_chat(
+    messages: list[dict],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """非流式补全，只返回正文（用于早期摘要等后台任务）。"""
+    message = await complete_chat_message(
+        messages, transport=transport, max_tokens=max_tokens
+    )
+    content = message.get("content")
     if not content:
         raise LlmUnavailable("LLM 空回复")
     return str(content)
