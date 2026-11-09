@@ -446,13 +446,43 @@
   $("btn-stop").addEventListener("click", stopVoice);
   $("btn-enroll").addEventListener("click", function () { enroll("device"); });
   $("btn-enroll-admin").addEventListener("click", function () { enroll("admin"); });
-  $("btn-text-send").addEventListener("click", function () {
-    var v = $("text-input").value.trim();
-    if (!v) return;
-    appendLog($("log-text"), "（文字）" + v + " —— Day5 接入 LLM 后生效", "r");
-    $("text-input").value = "";
-  });
+  $("btn-text-send").addEventListener("click", sendText);
   $("text-input").addEventListener("keydown", function (e) {
     if (e.key === "Enter") $("btn-text-send").click();
   });
+
+  /**
+   * 文字通道（Day5）：ASR 不可用时的可见降级。
+   * 走 POST /voice/text（设备 Token），服务端复用语音会话线程与 LLM 链路，
+   * 只回文字；模型故障时返回模板兜底并标 degraded，前端如实提示。
+   */
+  function sendText() {
+    var v = $("text-input").value.trim();
+    if (!v) return;
+    if (!deviceToken) { setStatus("请先连接语音（文字通道需要设备 Token）", "warn"); return; }
+    $("text-input").value = "";
+    appendLog($("log-text"), "（我）" + v, "t");
+    var btn = $("btn-text-send");
+    btn.disabled = true;
+    fetch("/api/v1/voice/text", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + deviceToken
+      },
+      body: JSON.stringify({ text: v })
+    }).then(function (resp) {
+      if (resp.status === 403) throw new Error("设备 Token 无权使用文字通道");
+      if (resp.status === 401) throw new Error("设备 Token 已失效，请重新连接");
+      if (!resp.ok) throw new Error("文字通道失败 HTTP " + resp.status);
+      return resp.json();
+    }).then(function (data) {
+      appendLog($("log-text"), "（康伴）" + data.reply, "r");
+      if (data.degraded) appendLog($("log-text"), "[降级] 模型暂不可用，已用兜底回复", "e");
+    }).catch(function (err) {
+      appendLog($("log-text"), "[失败] " + err.message, "e");
+    }).then(function () {
+      btn.disabled = false;
+    });
+  }
 })();

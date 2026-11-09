@@ -143,6 +143,192 @@ def _build_system_prompt() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 会话上下文与 LLM 流式回复（语音/文字双通道共用）
+# ---------------------------------------------------------------------------
+
+
+async def _load_thread(
+    db: AsyncSession,
+    *,
+    device_id: UUID,
+    elder_id: UUID | None,
+    identity: IdentitySource,
+) -> tuple[UUID | None, list]:
+    """复用/新建会话线程并取最近 5 轮历史；任何库异常都降级为不落库、无历史。"""
+    try:
+        conversation = await conversation_store.get_or_create_active_conversation(
+            db, device_id=device_id, elder_id=elder_id, identity_source=identity
+        )
+        history = await conversation_store.recent_messages(db, conversation.thread_id)
+        await db.commit()
+        return conversation.thread_id, history
+    except Exception:  # noqa: BLE001 —— 历史缺失不阻断对话
+        logger.exception("conversation context load failed")
+        await db.rollback()
+        return None, []
+
+
+async def _prepare_turn_state(thread_id: UUID | None, text: str) -> str | None:
+    """抽槽 + 轮次累加，返回注入 system prompt 的动态上下文。
+
+    槽位只写会话状态，不执行任何动作，也不触碰 ``verified_elder_id``。
+    """
+    if thread_id is None:
+        return None
+    try:
+        store = get_session_store()
+        async with store.mutate(str(thread_id)) as state:
+            state.slots = extract_slots(text, state.slots)
+            state.turn_count += 1
+        return context_summary.build_context_message(state)
+    except Exception:  # noqa: BLE001 —— 状态缺失不阻断对话
+        logger.exception("session state prepare failed")
+        return None
+
+
+async def _persist_turn(
+    db: AsyncSession, thread_id: UUID | None, user_text: str, assistant_text: str
+) -> bool:
+    """落库一轮问答；失败不影响回复，返回是否成功（成功才刷新早期摘要）。"""
+    if thread_id is None:
+        return False
+    try:
+        await conversation_store.record_turn(
+            db, thread_id=thread_id, user_text=user_text, assistant_text=assistant_text
+        )
+        await db.commit()
+        return True
+    except Exception:  # noqa: BLE001 —— 落库失败不影响对话
+        logger.exception("conversation turn persist failed")
+        await db.rollback()
+        return False
+
+
+async def _emit_or_clean(
+    sentence: str, emit: Callable[[str], Awaitable[str]] | None
+) -> str:
+    """有副作用回调时交给调用方（语音通道发 action/TTS），否则只剥动作标记。"""
+    if emit is not None:
+        return await emit(sentence)
+    cleaned, _ = action_service.parse_action_markers(sentence)
+    return cleaned
+
+
+async def _collect_llm_sentences(
+    messages: list[dict[str, str]],
+    collected: list[str],
+    *,
+    trace: TurnTrace | None = None,
+    emit: Callable[[str], Awaitable[str]] | None = None,
+) -> None:
+    """流式消费 LLM 增量 → 整句，剥净的句子追加进 ``collected``。
+
+    ``emit`` 是逐句副作用（语音通道用来先发动作事件再合成语音），缺省只剥标记。
+    熔断打开 / 首 token 超时统一抛 ``LlmUnavailable``，已产出的句子留在
+    ``collected``，调用方据此决定「沿用部分回复」还是回退模板。
+    """
+    assembler = _SentenceAssembler()
+    iterator = stream_chat(messages).__aiter__()
+    first = True
+    if trace is not None:
+        trace.mark("llm_start")
+    try:
+        async with get_llm_breaker().guard():
+            while True:
+                try:
+                    if first:
+                        delta = await asyncio.wait_for(
+                            anext(iterator),
+                            timeout=get_settings().llm_first_token_timeout_seconds,
+                        )
+                    else:
+                        delta = await anext(iterator)
+                except StopAsyncIteration:
+                    break
+                if first:
+                    first = False
+                    if trace is not None:
+                        trace.mark("llm_first_token")
+                for sentence in assembler.feed(delta):
+                    collected.append(await _emit_or_clean(sentence, emit))
+            for sentence in assembler.finish():
+                collected.append(await _emit_or_clean(sentence, emit))
+    except CircuitOpen as exc:
+        if trace is not None:
+            trace.degrade("llm_circuit_open")
+        raise LlmUnavailable(f"LLM 熔断中：{exc}") from exc
+    except TimeoutError as exc:
+        if trace is not None:
+            trace.degrade("llm_first_token_timeout")
+        raise LlmUnavailable("LLM 首 token 超时") from exc
+    finally:
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
+    if trace is not None:
+        trace.mark("llm_end")
+
+
+async def generate_text_reply(
+    *,
+    device_id: UUID,
+    elder_id: UUID | None,
+    identity: IdentitySource,
+    text: str,
+    db: AsyncSession,
+) -> tuple[str, TurnTrace]:
+    """文字通道（ASR 不可用时的可见降级）：复用 LLM 链路，只返回文本。
+
+    与语音通道共用会话线程、最近历史、槽位与早期摘要；不发 WS 事件、不做 TTS。
+    LLM 未配置/熔断/首 token 超时一律可见降级为模板回复，绝不向上抛模型错误。
+    ``elder_id`` 由调用方用服务端设备→房间级联得出，不接受前端传参。
+    """
+    trace = TurnTrace()
+    trace.set_meta("device_id", str(device_id))
+    trace.set_meta("elder_id", str(elder_id) if elder_id else None)
+    trace.mark("text_in")
+
+    thread_id, history = await _load_thread(
+        db, device_id=device_id, elder_id=elder_id, identity=identity
+    )
+    trace.set_meta("thread_id", str(thread_id) if thread_id else None)
+    context_text = await _prepare_turn_state(thread_id, text)
+
+    collected: list[str] = []
+    if llm_is_configured():
+        system_content = _build_system_prompt()
+        if context_text:
+            system_content = system_content + "\n\n" + context_text
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
+        messages += [{"role": m.role, "content": m.content} for m in history]
+        messages.append({"role": "user", "content": text})
+        try:
+            await _collect_llm_sentences(messages, collected, trace=trace)
+        except LlmUnavailable as exc:
+            trace.degrade("llm_fallback")
+            logger.warning(
+                "text llm unavailable, fallback to template",
+                extra={"event": "llm_fallback", "error": str(exc)},
+            )
+        except Exception as exc:  # noqa: BLE001 —— 模型侧异常不向长者抛 5xx
+            trace.degrade("llm_error")
+            logger.exception(
+                "text llm error, fallback to template",
+                extra={"event": "llm_fallback", "error": str(exc)},
+            )
+    else:
+        trace.degrade("llm_not_configured")
+
+    reply = "".join(collected).strip()
+    if not reply:
+        reply = action_service.parse_action_markers(template_reply(text))[0]
+    await _persist_turn(db, thread_id, text, reply)
+    trace.mark("done")
+    trace.log(event="text_latency")
+    return reply, trace
+
+
+# ---------------------------------------------------------------------------
 # Provider 惰性单例（缺省可启动：未配置时返回 None，由调用方走降级）
 # ---------------------------------------------------------------------------
 
@@ -902,48 +1088,14 @@ class VoiceSession:
         messages += [{"role": m.role, "content": m.content} for m in history]
         messages.append({"role": "user", "content": final_text})
 
-        assembler = _SentenceAssembler()
         clean_parts: list[str] = []
-        iterator = stream_chat(messages).__aiter__()
-        first = True
-        if trace:
-            trace.mark("llm_start")
         try:
-            try:
-                async with get_llm_breaker().guard():
-                    while True:
-                        try:
-                            if first:
-                                delta = await asyncio.wait_for(
-                                    anext(iterator),
-                                    timeout=get_settings().llm_first_token_timeout_seconds,
-                                )
-                            else:
-                                delta = await anext(iterator)
-                        except StopAsyncIteration:
-                            break
-                        if first:
-                            first = False
-                            if trace:
-                                trace.mark("llm_first_token")
-                        for sentence in assembler.feed(delta):
-                            clean_parts.append(await self._emit_sentence(sentence, trace))
-                    for sentence in assembler.finish():
-                        clean_parts.append(await self._emit_sentence(sentence, trace))
-            except CircuitOpen as exc:
-                if trace:
-                    trace.degrade("llm_circuit_open")
-                raise LlmUnavailable(f"LLM 熔断中：{exc}") from exc
-            except TimeoutError as exc:
-                if trace:
-                    trace.degrade("llm_first_token_timeout")
-                raise LlmUnavailable("LLM 首 token 超时") from exc
-            finally:
-                close = getattr(iterator, "aclose", None)
-                if close is not None:
-                    await close()
-            if trace:
-                trace.mark("llm_end")
+            await _collect_llm_sentences(
+                messages,
+                clean_parts,
+                trace=trace,
+                emit=lambda sentence: self._emit_sentence(sentence, trace),
+            )
         except LlmUnavailable:
             partial = "".join(clean_parts).strip()
             if partial:  # 已播出一半：沿用部分回复，不再重说模板
@@ -988,49 +1140,32 @@ class VoiceSession:
             return None, []
         try:
             async with self._db_factory() as db:
-                conversation = await conversation_store.get_or_create_active_conversation(
+                return await _load_thread(
                     db,
                     device_id=self.device_id,
                     elder_id=self.verified_elder_id,
-                    identity_source=identity,
+                    identity=identity,
                 )
-                history = await conversation_store.recent_messages(db, conversation.thread_id)
-                await db.commit()
-                return conversation.thread_id, history
         except Exception:  # noqa: BLE001 —— 历史缺失不阻断通话
             logger.exception("conversation context load failed")
             return None, []
 
-    async def _save_turn(self, thread_id: UUID | None, user_text: str, assistant_text: str) -> None:
+    async def _save_turn(
+        self, thread_id: UUID | None, user_text: str, assistant_text: str
+    ) -> None:
         if thread_id is None or self._db_factory is None:
             return
         try:
             async with self._db_factory() as db:
-                await conversation_store.record_turn(
-                    db, thread_id=thread_id, user_text=user_text, assistant_text=assistant_text
-                )
-                await db.commit()
+                persisted = await _persist_turn(db, thread_id, user_text, assistant_text)
         except Exception:  # noqa: BLE001 —— 落库失败不影响通话
             logger.exception("conversation turn persist failed")
             return
-        self._schedule_summary(thread_id)
+        if persisted:
+            self._schedule_summary(thread_id)
 
     async def _prepare_state(self, thread_id: UUID | None, final_text: str) -> str | None:
-        """抽槽 + 轮次累加，返回注入 system prompt 的动态上下文。
-
-        槽位只写会话状态，不执行任何动作，也不触碰 ``verified_elder_id``。
-        """
-        if thread_id is None:
-            return None
-        try:
-            store = get_session_store()
-            async with store.mutate(str(thread_id)) as state:
-                state.slots = extract_slots(final_text, state.slots)
-                state.turn_count += 1
-            return context_summary.build_context_message(state)
-        except Exception:  # noqa: BLE001 —— 状态缺失不阻断通话
-            logger.exception("session state prepare failed")
-            return None
+        return await _prepare_turn_state(thread_id, final_text)
 
     def _schedule_summary(self, thread_id: UUID) -> None:
         """把早期摘要放到后台任务，绑定当前 uvicorn 事件循环（禁止新建 loop）。"""

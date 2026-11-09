@@ -29,21 +29,23 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.device_token import DeviceCredentialError, validate_device_token
 from app.auth.dependencies import UserIdentity, get_current_device, require_role
-from app.core.logging import get_logger
+from app.auth.device_token import DeviceCredentialError, validate_device_token
+from app.auth.jwt import TokenTypeMismatch
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.db.session import get_session, get_session_factory
 from app.integrations import ProviderUnavailable
-from app.models.enums import AccountRole
+from app.models.enums import AccountRole, IdentitySource
 from app.services.device import DeviceNotFound, device_self_view
 from app.services.voice import (
     BiometricDeviceMissing,
-    VoiceSession,
     VoiceprintMismatch,
+    VoiceSession,
     biometric_list_rooms,
     biometric_login,
     enroll_voiceprint,
+    generate_text_reply,
     list_voiceprints,
     load_room_voiceprints,
     voice_session_manager,
@@ -181,6 +183,52 @@ async def list_voiceprints_route(
             }
             for r in records
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 文字对话通道（ASR 不可用时的可见降级）
+# ---------------------------------------------------------------------------
+
+
+class TextChatIn(BaseModel):
+    text: str = Field(..., max_length=200, description="长者文字输入（1–200 字）")
+
+
+@router.post("/voice/text")
+async def text_chat(
+    data: TextChatIn,
+    device_id: UUID = Depends(get_current_device),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """文字回复：复用语音通道的会话线程与 LLM 链路，只返回文本。
+
+    ASR 挂掉时前端降级到文字输入，长者仍能获得回复（验收项 5：可见降级）。
+    elder_id 仍由服务端「设备→房间」级联得出（单人间锁定长者；双人间走匿名线程），
+    不接受前端传参；LLM 未配置/熔断/超时一律模板兜底，绝不因模型故障 5xx。
+    """
+    text = data.text.strip()
+    if not text:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "文字内容不能为空")
+    try:
+        view = await device_self_view(session, device_id)
+    except DeviceNotFound as exc:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "设备未绑定房间，无法使用文字通道"
+        ) from exc
+    elder = view["elder"]
+    elder_id = elder.elder_id if elder is not None else None
+    reply, trace = await generate_text_reply(
+        device_id=device_id,
+        elder_id=elder_id,
+        identity=IdentitySource.DEVICE_ROOM if elder_id else IdentitySource.ANONYMOUS,
+        text=text,
+        db=session,
+    )
+    return {
+        "reply": reply,
+        "elder_id": str(elder_id) if elder_id else None,
+        "degraded": bool(trace.payload().get("degraded")),
     }
 
 

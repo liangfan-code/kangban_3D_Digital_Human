@@ -10,8 +10,9 @@
 - ``a2a_ms``：终句触发 → 第一条 ``tts`` 事件下发（最关键的端到端指标）；
 - ``turn_total_ms``：终句触发 → ``done`` 事件。
 
-隐私边界（AGENTS §实时/语音模块规则 4）：只写时长、数量与降级原因，
-不写转写文本、回复正文、音频字节或长者身份信息。
+隐私边界（AGENTS §实时/语音模块规则 4）：只写时长、数量、降级原因与
+服务端 Runtime Context 标识（device_id / elder_id / thread_id），
+不写转写文本、回复正文与音频字节。
 """
 
 from __future__ import annotations
@@ -106,11 +107,15 @@ class TurnTrace:
         payload.update(self._meta)
         return payload
 
-    def log(self, **extra: str | None) -> None:
-        """输出一条 ``turn_latency`` 结构化日志；同一轮只写一次。"""
+    def log(self, *, event: str = "turn_latency", **extra: str | None) -> None:
+        """输出一条结构化延迟日志；同一轮只写一次。
+
+        ``event`` 默认 ``turn_latency``（语音轮次）；文字通道传 ``text_latency``，
+        避免没有 TTS 的样本污染语音基线统计。
+        """
         if self._logged:
             return
         self._logged = True
         payload = self.payload()
         payload.update({k: v for k, v in extra.items() if v})
-        logger.info("turn_latency", extra={"event": "turn_latency", **payload})
+        logger.info(event, extra={"event": event, **payload})
