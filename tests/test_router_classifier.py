@@ -28,6 +28,14 @@ def test_five_question_groups_are_defined():
     ]
 
 
+@pytest.fixture(autouse=True)
+def _use_local_classifier(monkeypatch):
+    """路由判定测试固定使用本地实现，不依赖 laya-serve 是否运行。"""
+    monkeypatch.setattr(
+        "app.router.service.default_classifier", lambda: LocalIntentClassifier()
+    )
+
+
 def test_local_classifier_returns_direct_intent_with_confidence():
     result = LocalIntentClassifier().classify("外面下雨了吗")
     assert result.intent is Intent.WEATHER
@@ -126,6 +134,8 @@ def test_build_classifier_falls_back_when_laya_missing(tmp_path, monkeypatch):
         system_one_confidence_threshold=0.85,
     )
     monkeypatch.setattr("app.router.classifier.get_settings", lambda: settings)
+    # laya 可能已随项目安装，这里显式模拟"未安装"，让测试只验证降级分支
+    monkeypatch.setattr("app.integrations.laya.importlib.util.find_spec", lambda name: None)
     reset_classifier()
     try:
         assert isinstance(_build_classifier(), LocalIntentClassifier)

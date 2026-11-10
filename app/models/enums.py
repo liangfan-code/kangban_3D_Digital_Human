@@ -102,6 +102,21 @@ class WorkorderPriority(StrEnum):
     URGENT = "urgent"
 
 
+class WorkorderSource(StrEnum):
+    """工单来源：敏感词命中自动建单 / 人工建单。"""
+
+    SENSITIVE = "sensitive"
+    MANUAL = "manual"
+
+
+class WorkorderDispositionStatus(StrEnum):
+    """处理项三态：未读 / 已读 / 已处理（与工单五态解耦）。"""
+
+    UNREAD = "unread"
+    READ = "read"
+    HANDLED = "handled"
+
+
 class IdentitySource(StrEnum):
     DEVICE_ROOM = "device_room"
     VOICEPRINT = "voiceprint"

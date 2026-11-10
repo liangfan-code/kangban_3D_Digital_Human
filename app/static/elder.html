@@ -61,12 +61,21 @@
   <script>
     (function () {
       "use strict";
+      // 设备 Token 持久化在 localStorage（90 天长期凭证，专机专用平板）：
+      // 浏览器重启后 sessionStorage 为空，从持久层恢复会话，老人无需重新认证
+      if (!sessionStorage.getItem("kb_token") && localStorage.getItem("kb_device_token")) {
+        sessionStorage.setItem("kb_token", localStorage.getItem("kb_device_token"));
+      }
       if (!sessionStorage.getItem("kb_token")) {
         window.location.replace("/index.html");
         return;
       }
       KB.bindHealthBadge(document.getElementById("health-badge"));
-      document.getElementById("kb-logout").addEventListener("click", KB.logout);
+      document.getElementById("kb-logout").addEventListener("click", function () {
+        // 退出 = 主动放弃设备身份：必须清掉持久层凭证，否则刷新又会自动恢复会话
+        localStorage.removeItem("kb_device_token");
+        KB.logout();
+      });
 
       var view = document.getElementById("elder-view");
 

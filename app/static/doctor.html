@@ -15,6 +15,8 @@
       <span class="faint">关联长者的完整健康档案（含重大疾病）由您填写与维护；改动均留审计流水</span>
     </div>
 
+    <section class="mt-24" id="workorders"></section>
+
     <div class="grid grid-3 stagger" id="elder-cards"></div>
 
     <div class="grid grid-3 mt-24">
@@ -37,6 +39,7 @@
   </main>
 
   <script src="/js/api.js"></script>
+  <script src="/js/workorders.js"></script>
   <script>
     (function () {
       "use strict";
@@ -271,6 +274,7 @@
       }
 
       load();
+      KBWorkOrders.mount({ role: "doctor", rootId: "workorders" });
     })();
   </script>
 </body>

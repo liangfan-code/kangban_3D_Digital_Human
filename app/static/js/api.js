@@ -76,6 +76,8 @@
           e.code = err.code || "";
           e.traceId = err.trace_id || resp.headers.get("X-Trace-ID") || "";
           e.details = err.details || null;
+          // 工单 409：后端显式列出未完成的角色，供前端禁用关闭按钮并提示缺谁
+          e.unfinishedRoles = err.unfinished_roles || null;
           throw e;
         });
     });

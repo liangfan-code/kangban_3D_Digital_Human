@@ -15,6 +15,8 @@
       <span class="faint">与您关联长者的健康档案、AI 健康分析与健康摘要（按授权级别展示）</span>
     </div>
 
+    <section class="mt-24" id="workorders"></section>
+
     <div class="grid grid-2 stagger" id="elder-cards"></div>
 
     <div class="grid grid-2 mt-24">
@@ -32,6 +34,7 @@
   </main>
 
   <script src="/js/api.js"></script>
+  <script src="/js/workorders.js"></script>
   <script>
     (function () {
       "use strict";
@@ -223,6 +226,7 @@
       }
 
       load();
+      KBWorkOrders.mount({ role: "family", rootId: "workorders" });
     })();
   </script>
 </body>

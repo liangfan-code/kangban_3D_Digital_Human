@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -41,6 +42,7 @@ from app.agent.companion import respond as agent_respond
 from app.agent.tools import ToolContext, ToolResult, build_default_registry
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.db.session import get_session_factory
 from app.integrations import (
     ProviderUnavailable,
     TTSProvider,
@@ -64,6 +66,7 @@ from app.services.resilience import CircuitOpen, get_llm_breaker, get_tts_breake
 from app.services.session_state import get_session_store
 from app.services.slot_extractor import extract_slots
 from app.services.viseme import build_viseme_timeline
+from app.services.workorder import build_context_snapshot, create_sensitive_work_order
 from app.system_one.questions import CLARIFY_QUESTION
 
 logger = get_logger(__name__)
@@ -179,14 +182,20 @@ async def _call_tool(
     return result
 
 
-def _enqueue_sensitive(
+# ---- 敏感事件：优先建持久化工单，HITL 内存队列只做兜底（Day8）----
+
+# 后台建单任务引用：防止任务被 GC 提前回收
+_workorder_tasks: set[asyncio.Task] = set()
+
+
+def _enqueue_hitl(
     text: str,
     category: str | None,
     elder_id: UUID | None,
     device_id: str,
     trace: TurnTrace | None = None,
 ) -> None:
-    """敏感事件只入内存队列，日志只留类别，不写长者原文。"""
+    """兜底路径：沿用原有 HITL 内存队列（敏感事件主载体已切换为工单）。"""
     hitl_queue.enqueue(
         kind="sensitive",
         summary=category or "敏感事件",
@@ -196,6 +205,177 @@ def _enqueue_sensitive(
     )
     if trace:
         trace.set_meta("hitl_enqueued", "true")
+
+
+def _snapshot_messages(history: list[Any] | None) -> list[dict[str, Any]]:
+    """把会话历史（ORM 行或 dict）规整成快照需要的 role/content/created_at。"""
+    messages: list[dict[str, Any]] = []
+    for item in history or []:
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content")
+            created_at = item.get("created_at")
+        else:
+            role = getattr(item, "role", None)
+            content = getattr(item, "content", None)
+            created_at = getattr(item, "created_at", None)
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content, "created_at": created_at})
+    return messages
+
+
+async def _create_work_order(
+    *,
+    elder_id: UUID,
+    category: str | None,
+    device_id: str,
+    trigger_text: str,
+    assistant_reply: str | None,
+    history: list[Any] | None,
+    thread_id: UUID | None,
+    db_factory: async_sessionmaker[AsyncSession] | None,
+) -> None:
+    """用短会话建单：上下文快照只取真实会话消息，不补造内容。"""
+    factory = db_factory or get_session_factory()
+    async with factory() as db:
+        messages = _snapshot_messages(history)
+        if not messages and thread_id is not None:
+            # 会话内历史不可得时，从会话存储补读触发前最近消息（真实数据）
+            messages = _snapshot_messages(
+                await conversation_store.recent_messages(db, thread_id)
+            )
+        if (
+            messages
+            and messages[-1]["role"] == "user"
+            and messages[-1]["content"] == trigger_text
+        ):
+            # 后台任务与落库并发时可能读到本轮刚写入的触发句，去掉以免快照重复
+            messages.pop()
+        snapshot = build_context_snapshot(messages, trigger_text, assistant_reply)
+        workorder, created = await create_sensitive_work_order(
+            db,
+            elder_id=elder_id,
+            category=category or "",
+            device_id=device_id,
+            trigger_text=trigger_text,
+            context_snapshot=snapshot,
+        )
+        workorder_id = workorder.workorder_id
+        await db.commit()
+    logger.info(
+        "敏感事件工单已落库" if created else "敏感事件工单重复触发已累加",
+        extra={
+            "event": "workorder_created" if created else "workorder_occurrence",
+            "object_type": "workorder",
+            "object_id": str(workorder_id),
+            "elder_id": str(elder_id),
+            "device_id": device_id,
+            "sensitive_category": category,
+        },
+    )
+
+
+async def _create_work_order_safely(
+    *,
+    elder_id: UUID,
+    category: str | None,
+    device_id: str,
+    trigger_text: str,
+    assistant_reply: str | None,
+    history: list[Any] | None,
+    thread_id: UUID | None,
+    db_factory: async_sessionmaker[AsyncSession] | None,
+    trace: TurnTrace | None = None,
+) -> None:
+    """建单失败一律回退 HITL，绝不让异常冒泡影响老人端回复。"""
+    try:
+        await _create_work_order(
+            elder_id=elder_id,
+            category=category,
+            device_id=device_id,
+            trigger_text=trigger_text,
+            assistant_reply=assistant_reply,
+            history=history,
+            thread_id=thread_id,
+            db_factory=db_factory,
+        )
+    except Exception as exc:  # noqa: BLE001 —— 建单失败只降级，不中断对话
+        logger.warning(
+            "敏感事件建单失败，回退 HITL 队列",
+            extra={
+                "event": "workorder_create_failed",
+                "device_id": device_id,
+                "sensitive_category": category,
+                # 只记异常类型：异常串可能带出 SQL 参数，避免泄露对话原文
+                "error": type(exc).__name__,
+            },
+        )
+        _enqueue_hitl(trigger_text, category, elder_id, device_id, trace)
+
+
+def _enqueue_sensitive(
+    text: str,
+    category: str | None,
+    elder_id: UUID | None,
+    device_id: str,
+    trace: TurnTrace | None = None,
+    *,
+    history: list[Any] | None = None,
+    thread_id: UUID | None = None,
+    assistant_reply: str | None = None,
+    db_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> asyncio.Task | None:
+    """敏感事件入口：老人身份可确定时后台建单，否则/失败回退 HITL 队列。
+
+    建单在回复文本确定之后作为独立任务执行，不延长长者等待出声；日志只记
+    类别/工单 ID/异常类型，不写对话原文。
+    """
+    if elder_id is None:
+        _enqueue_hitl(text, category, None, device_id, trace)
+        logger.info(
+            "敏感事件未确定老人身份，回退 HITL 队列",
+            extra={
+                "event": "workorder_skipped_no_elder",
+                "device_id": device_id,
+                "sensitive_category": category,
+            },
+        )
+        return None
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None:
+        # 无运行事件循环（同步调用/进程收尾）：降级为 HITL，保证事件不丢
+        logger.warning(
+            "无运行事件循环，敏感事件回退 HITL 队列",
+            extra={
+                "event": "workorder_create_failed",
+                "device_id": device_id,
+                "sensitive_category": category,
+                "error": "no_running_loop",
+            },
+        )
+        _enqueue_hitl(text, category, elder_id, device_id, trace)
+        return None
+
+    task = loop.create_task(
+        _create_work_order_safely(
+            elder_id=elder_id,
+            category=category,
+            device_id=device_id,
+            trigger_text=text,
+            assistant_reply=assistant_reply,
+            history=history,
+            thread_id=thread_id,
+            db_factory=db_factory,
+            trace=trace,
+        )
+    )
+    _workorder_tasks.add(task)
+    task.add_done_callback(_workorder_tasks.discard)
+    return task
 
 
 async def _run_agent(
@@ -397,8 +577,18 @@ async def generate_text_reply(
 
     reply: str | None = None
     if decision.layer is RouteLayer.SAFETY:
-        _enqueue_sensitive(text, decision.sensitive_category, elder_id, str(device_id), trace)
         reply = safety_reply(decision.sensitive_category)
+        # 工单在回复文本确定后作为后台任务创建，不延长长者等待
+        _enqueue_sensitive(
+            text,
+            decision.sensitive_category,
+            elder_id,
+            str(device_id),
+            trace,
+            history=history,
+            thread_id=thread_id,
+            assistant_reply=reply,
+        )
     elif decision.layer is RouteLayer.RULE:
         outcome = execute_rule(decision)
         if outcome is not None and outcome.reply:
@@ -1214,14 +1404,19 @@ class VoiceSession:
         )
 
         if decision.layer is RouteLayer.SAFETY:
+            reply = safety_reply(decision.sensitive_category)
+            # 安全话术先播出；工单在后台任务里创建，不延长长者等待
             _enqueue_sensitive(
                 final_text,
                 decision.sensitive_category,
                 self.verified_elder_id,
                 str(self.device_id),
                 trace,
+                history=history,
+                thread_id=thread_id,
+                assistant_reply=reply,
+                db_factory=self._db_factory,
             )
-            reply = safety_reply(decision.sensitive_category)
             await self._emit_sentence(reply, trace)
             await self._save_turn(thread_id, final_text, reply)
             self._last_reply = reply

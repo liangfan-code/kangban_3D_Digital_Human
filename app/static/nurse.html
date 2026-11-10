@@ -15,6 +15,8 @@
       <span class="faint">列表由后端按您所辖楼栋自动收敛；健康信息按管理员授权级别展示</span>
     </div>
 
+    <section class="mt-24" id="workorders"></section>
+
     <div class="card">
       <div class="card-title">
         <h3>今日待录入体征</h3>
@@ -45,6 +47,7 @@
   </main>
 
   <script src="/js/api.js"></script>
+  <script src="/js/workorders.js"></script>
   <script>
     (function () {
       "use strict";
@@ -238,6 +241,7 @@
       }
 
       load();
+      KBWorkOrders.mount({ role: "nurse", rootId: "workorders" });
     })();
   </script>
 </body>

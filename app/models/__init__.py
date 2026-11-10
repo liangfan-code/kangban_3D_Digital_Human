@@ -22,7 +22,7 @@ from app.models.medication import MedicationPlan
 from app.models.memory import MemoryChunk
 from app.models.persona import Persona
 from app.models.voiceprint import Voiceprint
-from app.models.workorder import Workorder
+from app.models.workorder import Workorder, WorkorderDisposition, WorkorderEvent
 
 __all__ = [
     "Base",
@@ -48,4 +48,6 @@ __all__ = [
     "Room",
     "Voiceprint",
     "Workorder",
+    "WorkorderDisposition",
+    "WorkorderEvent",
 ]

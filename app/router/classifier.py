@@ -211,7 +211,25 @@ _default: IntentClassifier | None = None
 
 def _build_classifier() -> IntentClassifier:
     settings = get_settings()
-    if (settings.system_one_provider or "").lower() == "laya":
+    provider_name = (settings.system_one_provider or "").strip().lower()
+    if provider_name in {"laya_http", "laya-serve"}:
+        # 方案 C：权重在常驻 laya-serve 进程里加载，本进程只发 HTTP
+        from app.integrations.laya_http import LayaHttpClassifier
+
+        provider = LayaHttpClassifier(
+            base_url=settings.system_one_base_url,
+            model_name=settings.system_one_model_name,
+            timeout_ms=settings.system_one_timeout_ms,
+            api_key=settings.system_one_api_key,
+        )
+        if provider.available:
+            return provider
+        logger.warning(
+            "system_one laya_http unavailable, fallback to local",
+            extra={"event": "system_one_fallback", "provider": "laya_http"},
+        )
+        return LocalIntentClassifier()
+    if provider_name == "laya":
         # 延迟导入：未安装 laya 时应用照常启动
         from app.integrations.laya import LayaClassifier
 

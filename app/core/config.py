@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # ---- System One（后续 Optional）----
     system_one_provider: str | None = None
     system_one_model_path: str | None = None
+    # laya_http 模式：base_url 指向常驻 laya-serve，model_name 对应 LAYA_EXTRA_MODELS 注册名
+    system_one_base_url: str | None = None
+    system_one_api_key: str | None = None
+    system_one_model_name: str | None = None
     system_one_confidence_threshold: float = 0.85
     system_one_timeout_ms: int = 200
 

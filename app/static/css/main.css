@@ -892,3 +892,93 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ai-block .ai-meta { font-size: 13.5px; color: var(--ink-soft); margin-top: 8px; }
 
 .ai-text { white-space: pre-wrap; margin: 0; }
+
+/* ---------- 敏感事件工单（Day8） ---------- */
+
+.wo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--clay-line);
+  background: var(--clay-soft);
+  color: var(--clay-deep);
+  font-family: var(--font-body);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.wo-badge b { font-size: 17px; }
+
+.wo-badge.zero {
+  background: var(--card);
+  border-color: var(--line);
+  color: var(--ink-faint);
+}
+
+.wo-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--lacquer);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.wo-toolbar input[type="search"],
+.wo-toolbar select {
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+}
+
+.wo-toolbar input[type="search"] { flex: 1; min-width: 200px; }
+
+.wo-toolbar input[type="search"]:focus,
+.wo-toolbar select:focus { outline: 2px solid var(--clay); outline-offset: 1px; }
+
+.wo-row { cursor: pointer; }
+
+.wo-chat {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--state-bg);
+  padding: 12px 14px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.wo-msg {
+  max-width: 88%;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 15.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wo-msg .who {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+}
+
+.wo-msg-user { background: var(--card); border: 1px solid var(--line); }
+
+.wo-msg-assistant {
+  background: var(--clay-soft);
+  border: 1px solid var(--clay-line);
+  margin-left: auto;
+}
+
+.wo-plan { margin: 6px 0 0; }

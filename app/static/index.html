@@ -217,6 +217,10 @@
 
       function goElderPage(data) {
         sessionStorage.setItem("kb_token", data.access_token);
+        // 设备 Token 双键写入：kb_token 供页面门禁/KB.api，kb_device_token 供语音通道
+        // （localStorage 持久化，浏览器重启后仍自动连接，服务端可吊销兜底）
+        sessionStorage.setItem("kb_device_token", data.access_token);
+        localStorage.setItem("kb_device_token", data.access_token);
         // 与设备 Token 登录同款：elder.html 靠 /devices/me 校验设备身份
         window.location.href = "/elder.html";
       }
@@ -432,12 +436,17 @@
         clearErr(card);
         var token = this.elements.token.value.trim();
         sessionStorage.setItem("kb_token", token);
+        // 双键写入：语音通道读 kb_device_token，与声纹登录路径保持一致
+        sessionStorage.setItem("kb_device_token", token);
+        localStorage.setItem("kb_device_token", token);
         KB.api("GET", "/api/v1/auth/me").then(function (me) {
           if (!me.device_code) throw new Error("这不是有效的设备 Token，请从家人/工作人员入口登录");
           window.location.href = "/elder.html";
         }).catch(function (e) {
           if (e && e.message === "redirect") return;
           sessionStorage.removeItem("kb_token");
+          sessionStorage.removeItem("kb_device_token");
+          localStorage.removeItem("kb_device_token");
           showErr(card, KB.errText(e));
         });
       });
@@ -454,6 +463,9 @@
           registration_token: this.elements.registration_token.value.trim(),
         }).then(function (data) {
           sessionStorage.setItem("kb_token", data.access_token);
+          // 双键写入：注册换到的就是设备 Token，语音通道同样需要
+          sessionStorage.setItem("kb_device_token", data.access_token);
+          localStorage.setItem("kb_device_token", data.access_token);
           // 一次性展示设备 Token，用户确认保存后再进入设备页
           var m = KB.openModal(
             "<h3>设备 Token（长期有效）</h3>" +

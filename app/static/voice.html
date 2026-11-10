@@ -40,14 +40,20 @@
   </header>
 
   <main style="max-width: 860px; margin: 24px auto; padding: 0 16px;">
-    <!-- 设备登录区 -->
+    <!-- 设备登录区：有凭证时自动折叠为状态条（voice.js 控制），仅 4401/4403 时展开要求重录 -->
     <section class="card" id="login-card">
       <h2 style="margin-top:0;">1️⃣ 设备登录</h2>
-      <p style="color:#666;">粘贴<b>设备 Token</b>（eyJhbGci 开头，管理端签发；人 JWT 在此会被 403 拒绝）。</p>
-      <div style="display:flex; gap:8px;">
-        <input id="device-token" type="password" placeholder="设备 Token"
-               style="flex:1; font-size:16px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
-        <button class="btn btn-primary btn-voice" id="btn-login">连接语音</button>
+      <div id="device-status-bar"
+           style="display:none;font-size:17px;font-weight:600;color:#2e7d32;padding:6px 0;"></div>
+      <div id="login-form-wrap">
+        <p style="color:#666;">粘贴<b>设备 Token</b>（eyJhbGci 开头，管理端签发；人 JWT 在此会被 403 拒绝）。</p>
+        <div id="login-reason"
+             style="display:none;color:#c62828;font-size:15px;margin-bottom:8px;font-weight:600;"></div>
+        <div style="display:flex; gap:8px;">
+          <input id="device-token" type="password" placeholder="设备 Token"
+                 style="flex:1; font-size:16px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
+          <button class="btn btn-primary btn-voice" id="btn-login">连接语音</button>
+        </div>
       </div>
     </section>
 

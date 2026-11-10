@@ -23,6 +23,7 @@
       <button class="tab" data-tab="elders">长者</button>
       <button class="tab" data-tab="assignments">关联</button>
       <button class="tab" data-tab="healthgrants">健康授权</button>
+      <button class="tab" data-tab="workorders">工单</button>
     </nav>
 
     <!-- 房间 -->
@@ -118,9 +119,15 @@
       </div>
       <div id="audit-list" class="mt-8"></div>
     </section>
+
+    <!-- 工单 -->
+    <section class="tab-panel" id="panel-workorders">
+      <div id="workorders"></div>
+    </section>
   </main>
 
   <script src="/js/api.js"></script>
+  <script src="/js/workorders.js"></script>
   <script>
     (function () {
       "use strict";
@@ -130,7 +137,7 @@
         var loaders = {
           rooms: loadRooms, personas: loadPersonas, devices: loadDevices,
           accounts: loadAccounts, elders: loadElders, assignments: loadAssignments,
-          healthgrants: loadHealthGrants,
+          healthgrants: loadHealthGrants, workorders: loadWorkorders,
         };
         if (loaders[tab]) loaders[tab]();
       });
@@ -140,6 +147,13 @@
 
       // 缓存（页面内）：房间/人设/账号/长者，供下拉与名称映射
       var cache = { rooms: [], personas: [], accounts: [], elders: [] };
+
+      // 工单面板：首次切到该页签时挂载，再次进入只刷新
+      var woPanel = null;
+      function loadWorkorders() {
+        if (!woPanel) woPanel = KBWorkOrders.mount({ role: "admin", rootId: "workorders" });
+        else woPanel.refresh();
+      }
 
       function roomLabel(r) { return r.building_code + "-" + r.floor + "F-" + r.room_number + "（" + r.bed_count + "人间）"; }
       function roomById(id) { return cache.rooms.find(function (r) { return r.room_id === id; }); }

@@ -18,7 +18,14 @@
   var loginCard = $("login-card"), voiceCard = $("voice-card"), fallbackCard = $("fallback-card");
 
   // ---------- 状态 ----------
-  var deviceToken = sessionStorage.getItem("kb_device_token") || "";
+  // 统一凭证读取（唯一入口）：设备 Token 优先（session → localStorage 持久层），
+  // 兼容入口页只写 kb_token 的旧路径。老人从入口到语音只需一次认证。
+  function getDeviceToken() {
+    return sessionStorage.getItem("kb_device_token") ||
+           localStorage.getItem("kb_device_token") ||
+           sessionStorage.getItem("kb_token") || "";
+  }
+  var deviceToken = getDeviceToken();
   var ws = null, pc = null, micStream = null;
   var lastVoiceToken = null; // verification 通过后下发，重连时 resume 免验
   var audioCtx = null, ttsQueue = [], ttsPlaying = false;
@@ -64,10 +71,62 @@
       connected = false;
       setBadge("连接关闭(" + e.code + ")", false);
       setStatus("连接已关闭：" + (e.reason || e.code), "err");
-      if (e.code === 4403) appendLog(logAsr, "[鉴权失败] 人 JWT 不能用于设备通道", "e");
-      else if (e.code === 4401) appendLog(logAsr, "[鉴权失败] 设备 Token 无效", "e");
+      if (e.code === 4403) {
+        appendLog(logAsr, "[鉴权失败] 人 JWT 不能用于设备通道", "e");
+        showLoginCard("检测到的是人账号 JWT——语音通道需要设备 Token，请在下方重新录入设备 Token");
+      } else if (e.code === 4401) {
+        appendLog(logAsr, "[鉴权失败] 设备 Token 无效", "e");
+        clearStoredDeviceToken();
+        showLoginCard("设备 Token 无效或已过期（可能已被吊销），请重新录入设备 Token");
+      }
     };
     ws.onerror = function () { setBadge("连接异常", false); };
+  }
+
+  // ---------- 设备凭证卡片折叠 / 展开（自动连接，老人全程免粘贴） ----------
+  function clearStoredDeviceToken() {
+    sessionStorage.removeItem("kb_device_token");
+    localStorage.removeItem("kb_device_token");
+  }
+  /** 鉴权失败（4401/4403）时展开登录卡片，给出明确原因并要求重新录入。 */
+  function showLoginCard(reason) {
+    var formWrap = $("login-form-wrap"), bar = $("device-status-bar"), note = $("login-reason");
+    if (!formWrap) return; // 旧版 voice.html 无折叠结构，保持原行为
+    if (note && reason) { note.textContent = "⚠ " + reason; note.style.display = ""; }
+    formWrap.style.display = "";
+    if (bar) bar.style.display = "none";
+    loginCard.style.display = "";
+    voiceCard.style.display = "none";
+    $("device-token").value = getDeviceToken();
+  }
+  /** 有凭证时把登录卡片折叠为状态条：展示设备编码与房间号（来自 /devices/me）。 */
+  function collapseToStatusBar() {
+    var formWrap = $("login-form-wrap"), bar = $("device-status-bar"), note = $("login-reason");
+    if (!formWrap || !bar) return;
+    if (note) note.style.display = "none";
+    formWrap.style.display = "none";
+    bar.style.display = "";
+    bar.textContent = "设备凭证校验中…";
+    fetch("/api/v1/devices/me", {
+      headers: { Authorization: "Bearer " + getDeviceToken() }
+    }).then(function (r) { return r.ok ? r.json() : null; }).then(function (me) {
+      if (!me) { bar.textContent = "已使用保存的设备凭证自动连接"; return; }
+      bar.textContent = "已登录设备：" + (me.device_code || "—") +
+        " · " + (me.building_code || "—") + " 栋 " + (me.room_number || "—") + " 房" +
+        (me.mode === "single" && me.elder ? " · " + me.elder.name : "");
+    }).catch(function () { bar.textContent = "已使用保存的设备凭证自动连接"; });
+  }
+  /** 页面加载即自动连接：已有设备凭证则直接走 WS 首帧鉴权，不再要求粘贴。 */
+  function autoConnect() {
+    deviceToken = getDeviceToken();
+    if (!deviceToken) return;
+    $("device-token").value = deviceToken;
+    setStatus("连接中…", "warn");
+    collapseToStatusBar();
+    connectWS(deviceToken, function () {
+      voiceCard.style.display = "";
+      hideFallback();
+    });
   }
 
   function handleEvent(ev, onReady) {
@@ -273,7 +332,7 @@
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: "Bearer " + deviceToken
+              Authorization: "Bearer " + getDeviceToken()
             },
             body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type })
           });
@@ -383,7 +442,7 @@
   }
 
   function enroll(channel) {
-    if (!deviceToken) { setStatus("请先设备登录", "warn"); return; }
+    if (!getDeviceToken()) { setStatus("请先设备登录", "warn"); return; }
     var adminToken = "", elderId = "";
     if (channel === "admin") {
       adminToken = ($("admin-token") || {}).value || "";
@@ -421,7 +480,7 @@
           body.elder_id = elderId;
         } else {
           url = "/api/v1/voice/enroll/device";
-          headers = { "Content-Type": "application/json", Authorization: "Bearer " + deviceToken };
+          headers = { "Content-Type": "application/json", Authorization: "Bearer " + getDeviceToken() };
         }
         setStatus("声纹上传中…", "warn");
         return fetch(url, {
@@ -475,14 +534,16 @@
     deviceToken = $("device-token").value.trim();
     if (!deviceToken) { setStatus("请粘贴设备 Token", "warn"); return; }
     sessionStorage.setItem("kb_device_token", deviceToken);
+    localStorage.setItem("kb_device_token", deviceToken);
     setStatus("连接中…", "warn");
+    collapseToStatusBar();
     connectWS(deviceToken, function () {
-      loginCard.style.display = "none";
       voiceCard.style.display = "";
       hideFallback();
     });
   });
   if (deviceToken) $("device-token").value = deviceToken;
+  autoConnect();
 
   $("btn-voice").addEventListener("click", startVoice);
   $("btn-stop").addEventListener("click", stopVoice);
@@ -501,7 +562,7 @@
   function sendText() {
     var v = $("text-input").value.trim();
     if (!v) return;
-    if (!deviceToken) { setStatus("请先连接语音（文字通道需要设备 Token）", "warn"); return; }
+    if (!getDeviceToken()) { setStatus("请先连接语音（文字通道需要设备 Token）", "warn"); return; }
     $("text-input").value = "";
     appendLog($("log-text"), "（我）" + v, "t");
     var btn = $("btn-text-send");
@@ -510,7 +571,7 @@
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + deviceToken
+        Authorization: "Bearer " + getDeviceToken()
       },
       body: JSON.stringify({ text: v })
     }).then(function (resp) {
