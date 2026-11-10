@@ -69,11 +69,22 @@ def test_normalize_strips_punctuation_and_spaces():
         ("我找不到家了", "走失"),
         ("我不想活了", "情绪低落"),
         ("我有点不舒服", "身体不适"),
+        # 词表覆盖不到的组合表达：慢病名 + 发作动词 / 部位 + 症状
+        ("我感觉我心脏病犯了", "急症"),
+        ("老毛病又犯了", "急症"),
+        ("我犯心脏病了", "急症"),
+        ("胸口像针扎一样", "急症"),
+        ("半边身子发麻", "急症"),
     ],
 )
 def test_safety_lexicon(text, category):
     hit = match_sensitive(text)
     assert hit is not None and hit.category == category
+
+
+@pytest.mark.parametrize("text", ["膝盖疼怎么办", "我孙子膝盖疼", "今天心情好多了"])
+def test_safety_patterns_do_not_over_trigger(text):
+    assert match_sensitive(text) is None
 
 
 def test_safety_precedes_rules():
@@ -88,6 +99,13 @@ def test_rule_layer_decision_carries_tool():
     decision = route_text("今天天气怎么样")
     assert decision.layer is RouteLayer.RULE
     assert decision.tool == "weather_get"
+
+
+def test_multi_intent_escalates_before_rules():
+    """多意图先于规则层：否则天气规则会截断「几点了」这半个问题。"""
+    decision = route_text("今天天气怎么样，现在几点了？")
+    assert decision.layer is RouteLayer.AGENT
+    assert decision.escalated_to_agent is True
 
 
 def test_unmatched_text_escalates_to_agent():

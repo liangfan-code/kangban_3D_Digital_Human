@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.mcp_client import McpWeatherClient
+from app.router.executor import time_reply
 from app.services.hitl import hitl_queue
 
 
@@ -133,6 +134,9 @@ def build_default_registry(
             degraded=None if result.ok else "mcp_unavailable",
         )
 
+    async def time_get(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
+        return ToolResult(ok=True, content=time_reply())
+
     async def medication_query(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
         # Day7 接真实用药计划；当前明确告知尚未接入，绝不编造药名/剂量
         return ToolResult(
@@ -180,6 +184,9 @@ def build_default_registry(
 
     registry.register(
         ToolSpec("weather_get", "查询本地天气（本地示例数据）", _weather_parameters(), weather_get)
+    )
+    registry.register(
+        ToolSpec("time_get", "查询当前日期与时间", _empty_parameters(), time_get)
     )
     registry.register(
         ToolSpec(

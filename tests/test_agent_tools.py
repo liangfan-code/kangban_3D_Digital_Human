@@ -29,10 +29,23 @@ def _clear_hitl():
 def test_registry_exposes_openai_schemas():
     registry = build_default_registry(weather_client=FakeWeather())
     names = registry.names()
-    assert {"weather_get", "medication_query", "media_play", "notify_family"} <= set(names)
+    assert {
+        "weather_get",
+        "time_get",
+        "medication_query",
+        "media_play",
+        "notify_family",
+    } <= set(names)
     schemas = registry.schemas()
     assert all(item["type"] == "function" for item in schemas)
     assert all("parameters" in item["function"] for item in schemas)
+
+
+async def test_time_tool_returns_clock_text():
+    registry = build_default_registry(weather_client=FakeWeather())
+    result = await registry.call("time_get", {}, ToolContext())
+    assert result.ok is True
+    assert result.content.startswith("现在是")
 
 
 async def test_weather_tool_returns_mcp_text():

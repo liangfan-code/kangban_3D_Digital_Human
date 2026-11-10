@@ -92,6 +92,8 @@
   function showLoginCard(reason) {
     var formWrap = $("login-form-wrap"), bar = $("device-status-bar"), note = $("login-reason");
     if (!formWrap) return; // 旧版 voice.html 无折叠结构，保持原行为
+    var title = $("login-title");
+    if (title) title.textContent = "1️⃣ 设备登录";
     if (note && reason) { note.textContent = "⚠ " + reason; note.style.display = ""; }
     formWrap.style.display = "";
     if (bar) bar.style.display = "none";
@@ -103,6 +105,8 @@
   function collapseToStatusBar() {
     var formWrap = $("login-form-wrap"), bar = $("device-status-bar"), note = $("login-reason");
     if (!formWrap || !bar) return;
+    var title = $("login-title");
+    if (title) title.textContent = "🔗 设备已连接（无需重复登录）";
     if (note) note.style.display = "none";
     formWrap.style.display = "none";
     bar.style.display = "";

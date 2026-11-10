@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>康伴 · 语音测试台（Day4）</title>
+  <title>康伴 · 语音对话</title>
   <link rel="stylesheet" href="/css/main.css" />
   <style>
     /* 适老大字号状态条（Day3 规划 D3 决策：独立语音测试页） */
@@ -33,7 +33,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo">康伴</span><span class="sub">语音测试台（Day3）</span></div>
+    <div class="brand"><span class="logo">康伴</span><span class="sub">语音对话</span></div>
     <div class="whoami">
       <span class="health-badge" id="conn-badge"><span class="dot"></span>未连接</span>
     </div>
@@ -42,7 +42,7 @@
   <main style="max-width: 860px; margin: 24px auto; padding: 0 16px;">
     <!-- 设备登录区：有凭证时自动折叠为状态条（voice.js 控制），仅 4401/4403 时展开要求重录 -->
     <section class="card" id="login-card">
-      <h2 style="margin-top:0;">1️⃣ 设备登录</h2>
+      <h2 id="login-title" style="margin-top:0;">1️⃣ 设备登录</h2>
       <div id="device-status-bar"
            style="display:none;font-size:17px;font-weight:600;color:#2e7d32;padding:6px 0;"></div>
       <div id="login-form-wrap">
@@ -54,6 +54,11 @@
                  style="flex:1; font-size:16px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
           <button class="btn btn-primary btn-voice" id="btn-login">连接语音</button>
         </div>
+        <!-- 老人兜底：凭证缺失/失效时不要求粘贴 Token，回入口页重新走生物识别 -->
+        <p style="margin-top:12px;">
+          <a class="btn btn-primary btn-voice" href="/index.html"
+             style="text-decoration:none;display:inline-block;">🙋 返回验证进入</a>
+        </p>
       </div>
     </section>
 
@@ -123,7 +128,7 @@
     </p>
   </main>
 
-  <script src="/js/voice.js"></script>
+  <script src="/js/voice.js?v=20261110"></script>
   <!-- engine.js 使用裸模块名（three / @pixiv/three-vrm），需 importmap 映射到本地 vendor
        （与老师 avatar.html 同款；缺失会报 Failed to resolve module specifier "three"） -->
   <script type="importmap">

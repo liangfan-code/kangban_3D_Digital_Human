@@ -19,10 +19,16 @@ async def no_cache_static(request: Request, call_next) -> Response:
 
     避免"HTML 已更新而 JS/CSS 仍是旧缓存"的版本错位（会引发前端脚本报错、
     页面交互失效）。no-cache 为标准 HTTP 头，主流浏览器均支持；接口响应不受影响。
+
+    注意：.js 的 Content-Type 随平台而异（Windows/Python3.13 为 text/javascript，
+    其他环境可能是 application/javascript），两种都必须匹配，否则 JS 会退回启发式
+    缓存，出现"改了前端但浏览器仍跑旧脚本"的问题。
     """
     response = await call_next(request)
     ctype = response.headers.get("content-type", "")
-    if ctype.startswith(("text/html", "application/javascript", "text/css")):
+    if ctype.startswith(
+        ("text/html", "text/css", "text/javascript", "application/javascript")
+    ):
         response.headers["Cache-Control"] = "no-cache"
     return response
 

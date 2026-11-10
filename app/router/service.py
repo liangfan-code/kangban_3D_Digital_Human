@@ -1,4 +1,4 @@
-"""三级路由入口：安全一票否决 → 规则层 → 分类器层 → 主控 Agent。
+"""三级路由入口：安全一票否决 → 多意图升级 → 规则层 → 分类器层 → 主控 Agent。
 
 本函数是纯判定，不产生副作用，语音/文字通道与离线评测共用。
 分类器只回答五组问题；是否单步执行、是否澄清、是否升级由这里决定。
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from app.agent.companion import looks_multi_intent
 from app.router.classifier import (
     DIRECT_INTENTS,
     ClassifierUnavailable,
@@ -89,6 +90,15 @@ def route_text(
             intent=Intent.OTHER,
             is_sensitive=True,
             sensitive_category=sensitive.category,
+        )
+
+    # 多意图必须先于规则/分类器单步执行：否则「今天天气怎么样，现在几点了」
+    # 会被 R07 天气规则截断，只回答其中一个问题（由主控 Agent 逐项调用工具）。
+    if looks_multi_intent(text):
+        return RouteDecision(
+            layer=RouteLayer.AGENT,
+            intent=Intent.OTHER,
+            escalated_to_agent=True,
         )
 
     rule_hit = match_rule(text)

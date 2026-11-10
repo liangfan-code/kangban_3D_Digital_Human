@@ -36,7 +36,8 @@ def safety_reply(category: str | None) -> str:
     return _SAFETY_REPLIES.get(category or "", _SAFETY_FALLBACK)
 
 
-def _time_reply() -> str:
+def time_reply() -> str:
+    """当前时间话术：规则层与主控 Agent 的 time_get 工具共用。"""
     now = datetime.now(ZoneInfo(get_settings().app_timezone))
     period = "上午" if now.hour < 12 else "下午"
     hour = now.hour % 12 or 12
@@ -61,7 +62,7 @@ def execute_rule(decision: RouteDecision) -> RuleOutcome | None:
             ({"type": "control", "action": "media_play", "genre": genre},),
         )
     if action == "time_query":
-        return RuleOutcome(_time_reply())
+        return RuleOutcome(time_reply())
     if action == "farewell":
         return RuleOutcome("好，您慢点儿，我随时都在。")
     # weather_query / medication_query 等 Tool 动作、repeat 由上层处理

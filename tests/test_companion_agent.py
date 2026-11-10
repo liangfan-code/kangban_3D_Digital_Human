@@ -40,13 +40,17 @@ def _registry(order: list[str]) -> ToolRegistry:
         "吃完药放戏再告诉我儿子",
         "我想听越剧，再问问天气",
         "帮我查下天气，然后通知我女儿",
+        "今天天气怎么样，现在几点了？",
+        "放段越剧，再把声音调小一点",
     ],
 )
 def test_multi_intent_is_detected(text):
     assert looks_multi_intent(text) is True
 
 
-@pytest.mark.parametrize("text", ["你好", "我想听越剧", "今天天气怎么样", "我要吃药"])
+@pytest.mark.parametrize(
+    "text", ["你好", "我想听越剧", "今天天气怎么样", "我要吃药", "现在几点了"]
+)
 def test_single_intent_is_not_agent(text):
     assert looks_multi_intent(text) is False
 

@@ -3,12 +3,20 @@
 原则（大纲课时 6.3）：
 - 命中即进待人工确认队列（Day6.3 接入），只播预设安抚话术；
 - 宁可错杀，不做医疗判断，不说「您这是××病」；
-- 纯本地词表，零延迟、不依赖 LLM/分类器是否可用，模型层故障时依然生效。
+- 纯本地词表 + 组合症状模式，零延迟、不依赖 LLM/分类器是否可用，
+  模型层故障时依然生效。
+
+词表之外还有一类「词表覆盖不到」的高危表达（如「我的心脏病犯了」）：
+这类句子没有固定关键词，但由「慢病名 + 发作动词」或「部位 + 症状」组合而成，
+因此用本地正则模式兜底，避免只有命中固定词才建工单。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from app.router.rules import normalize_text
 
 # 分类 → 关键词。只收明确的高危表达，避免把「天气难受」之类日常句误判；
 # 业务侧仍按「宁可错杀」处理：命中即人工兜底。
@@ -102,6 +110,79 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+# 组合症状模式 → (类别, 模式名)。关键词表只能覆盖固定说法，
+# 这里补「慢病名 + 发作动词」「部位 + 症状」「突发 + 急性表现」等常见变体；
+# 模式名写日志，避免把对话原文带进日志。
+_PATTERN_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    (
+        "急症",
+        "急症-慢病急性发作",
+        re.compile(
+            r"(心脏病|冠心病|心绞痛|心肌梗死|心梗|脑梗|脑中风|中风|癫痫|哮喘|老毛病)"
+            r"[^。！？]{0,3}(犯|发作|发了|又犯|来了|起来)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-慢病发作句式",
+        re.compile(
+            r"(犯|发作|发了)[^。！？]{0,2}"
+            r"(心脏病|冠心病|心绞痛|心梗|脑梗|中风|癫痫|哮喘|老毛病)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-心胸不适",
+        re.compile(
+            r"(心脏|心口|胸口|胸前|胸)[^。！？]{0,4}"
+            r"(疼|痛|闷|堵|紧|压|针扎|揪|难受|不舒服|发慌|心慌)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-剧痛",
+        re.compile(
+            r"(疼|痛|难受|不舒服)(得|的)?(厉害|要命|受不了|不行|直冒汗|打滚|直不起腰)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-突发",
+        re.compile(
+            r"(突然|忽然|一下子|猛地)[^。！？]{0,6}"
+            r"(疼|痛|晕|麻|吐|喘|看不清|站不住|站不稳|说不出话|没力气|摔倒)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-呼吸困难",
+        re.compile(r"(喘不上|喘不过|上不来气|呼吸(困难|急促|费劲)|憋气|憋得慌)"),
+    ),
+    (
+        "急症",
+        "急症-肢体异常",
+        re.compile(
+            r"(手脚|半边身子|半身|一侧|胳膊|腿)[^。！？]{0,4}"
+            r"(发麻|麻了|无力|没知觉|不听使唤|动不了)"
+        ),
+    ),
+    (
+        "急症",
+        "急症-意识异常",
+        re.compile(r"(昏迷|休克|抽搐|抽风|口吐白沫|翻白眼|叫不醒|没意识|意识不清)"),
+    ),
+    (
+        "急症",
+        "急症-出血",
+        re.compile(r"(吐血|咳血|便血|尿血|流血不止|出血不止|血止不住)"),
+    ),
+    (
+        "急症",
+        "急症-危急表达",
+        re.compile(r"我[^。！？]{0,6}(快不行了|撑不住了|受不了了|坚持不住了)"),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class SensitiveHit:
@@ -115,8 +196,12 @@ def match_sensitive(text: str) -> SensitiveHit | None:
     """返回首个命中的敏感类别；未命中返回 None。"""
     if not text:
         return None
+    normalized = normalize_text(text)
     for category, keywords in _PATTERNS:
         for keyword in keywords:
-            if keyword in text:
+            if keyword in normalized:
                 return SensitiveHit(category=category, keyword=keyword)
+    for category, label, pattern in _PATTERN_RULES:
+        if pattern.search(normalized):
+            return SensitiveHit(category=category, keyword=label)
     return None
