@@ -1,9 +1,13 @@
-"""员工端工单实时推送中心（Day8 Task 4）。
+"""工单实时推送中心（Day8 Task 4 / Day7 段1.5 四端化）。
 
 边界与约定：
-- 只维护 account_id → 连接集合，连接的建立/关闭由路由层负责，本模块不感知 HTTP；
-- 推送范围：该工单 elder_id 对应的有效医生授权、护理楼栋授权，以及全部启用管理员；
+- 只维护 account_id → 连接有序列表，连接的建立/关闭由路由层负责，本模块不感知 HTTP；
+- WS 与广播共用唯一角色常量 ``WS_ROLES``（四端），是否计算 counts/处理项仍以
+  ``STAFF_ROLES``（doctor/nurse）为准；
+- 推送范围：该工单 elder_id 对应的有效医生授权、护理楼栋授权、全部启用管理员，
+  以及与该长者存在有效绑定的家属；
 - 事件体统一为 ``{"type": ..., "data": {...}}``，类型见 ``TICKET_CREATED`` 等常量；
+  admin/family 只收刷新信号，不发 ``ticket.counts``；
 - 单连接发送失败只记日志并移除该连接，绝不影响业务事务（WS 是可选增强通道）。
 """
 
@@ -23,6 +27,7 @@ from app.models import (
     BuildingAssignment,
     DoctorElderAssignment,
     Elder,
+    FamilyElderLink,
     Room,
     Workorder,
 )
@@ -36,21 +41,49 @@ TICKET_UPDATED = "ticket.updated"
 TICKET_RESOLVED = "ticket.resolved"
 TICKET_COUNTS = "ticket.counts"
 
+# 四端 WS 鉴权与广播收件人的唯一角色来源；广播与鉴权禁止各写一份角色列表。
+WS_ROLES = frozenset(
+    {
+        AccountRole.DOCTOR,
+        AccountRole.NURSE,
+        AccountRole.ADMIN,
+        AccountRole.FAMILY,
+    }
+)
+# 单账号 WS 连接上限，超出时由路由层关闭最旧连接。
+WS_CONNECTIONS_PER_ACCOUNT = 3
+
 
 class WorkorderEventHub:
-    """进程内订阅中心：同一事件循环下运行，连接集合不做跨线程同步。"""
+    """进程内订阅中心：同一事件循环下运行，连接集合不做跨线程同步。
+
+    连接按注册顺序保存（list），``register`` 超过单账号上限时返回被挤出的
+    最旧连接，由调用方负责关闭。
+    """
 
     def __init__(self) -> None:
-        self._connections: dict[UUID, set[Any]] = defaultdict(set)
+        self._connections: dict[UUID, list[Any]] = defaultdict(list)
 
-    def register(self, account_id: UUID, connection: Any) -> None:
-        self._connections[account_id].add(connection)
+    def register(
+        self, account_id: UUID, connection: Any, *, limit: int | None = None
+    ) -> list[Any]:
+        """注册连接；返回因超出上限被挤出的最旧连接（按需关闭），可能为空。"""
+        max_conn = WS_CONNECTIONS_PER_ACCOUNT if limit is None else limit
+        connections = self._connections[account_id]
+        connections.append(connection)
+        evicted: list[Any] = []
+        while len(connections) > max_conn:
+            evicted.append(connections.pop(0))
+        return evicted
 
     def unregister(self, account_id: UUID, connection: Any) -> None:
         connections = self._connections.get(account_id)
         if connections is None:
             return
-        connections.discard(connection)
+        try:
+            connections.remove(connection)
+        except ValueError:
+            pass
         if not connections:
             self._connections.pop(account_id, None)
 
@@ -71,7 +104,7 @@ workorder_event_hub = WorkorderEventHub()
 async def _resolve_recipients(
     session: AsyncSession, elder_id: UUID
 ) -> dict[UUID, str]:
-    """解析某老人的通知对象：有效医生授权 + 命中楼栋的护理 + 全部启用管理员。"""
+    """解析某老人的通知对象：有效医生授权 + 命中楼栋的护理 + 全部启用管理员 + 有效绑定家属。"""
     recipients: dict[UUID, str] = {}
 
     doctor_ids = (
@@ -133,6 +166,29 @@ async def _resolve_recipients(
     for account_id in admin_ids:
         recipients[account_id] = AccountRole.ADMIN
 
+    # 家属：按长者有效绑定解析（active 且未过期），不缓存
+    family_ids = (
+        await session.execute(
+            select(Account.account_id)
+            .join(
+                FamilyElderLink,
+                FamilyElderLink.account_id == Account.account_id,
+            )
+            .where(
+                Account.role == AccountRole.FAMILY,
+                Account.status == AccountStatus.ACTIVE,
+                FamilyElderLink.elder_id == elder_id,
+                FamilyElderLink.status == AssignmentStatus.ACTIVE,
+                or_(
+                    FamilyElderLink.valid_until.is_(None),
+                    FamilyElderLink.valid_until > func.now(),
+                ),
+            )
+        )
+    ).scalars().all()
+    for account_id in family_ids:
+        recipients[account_id] = AccountRole.FAMILY
+
     return recipients
 
 
@@ -146,6 +202,7 @@ def _payload(
     data: dict[str, Any] = {
         "workorder_id": str(workorder.workorder_id),
         "elder_id": str(workorder.elder_id),
+        "type": workorder.type,
         "category": workorder.sensitive_category,
         "status": workorder.status,
         "priority": workorder.priority,

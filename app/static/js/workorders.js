@@ -1,8 +1,9 @@
 /* ============================================================
-   敏感事件工单面板（Day8 Task 6，原生 JS，无依赖）
+   敏感事件工单面板（Day8 Task 6 / Day7 段1.5 四端实时化，原生 JS，无依赖）
    - 四类页面共用：doctor / nurse（可读可提交）、admin（终审关闭）、family（只读）
    - 依赖 /js/api.js 的 KB（api / openModal / toast / esc / renderState）
-   - 员工端额外连接 /api/v1/staff/ws；断线回退为 30 秒轮询未处理数
+   - 四端均连接 /api/v1/staff/ws；staff 收 ticket.counts 与刷新信号，
+     admin/family 只收刷新信号；断线/心跳超时回退 30 秒轮询
    - 安全约定：不在 console 输出 token、对话原文或方案全文
    ============================================================ */
 
@@ -23,6 +24,12 @@
   var PRIORITY_LABEL = {
     urgent: ["tag-lacquer", "紧急"], high: ["tag-amber", "优先"], normal: ["", "一般"], low: ["", "低"],
   };
+  // 四端 WS 接入白名单（与后端 WS_ROLES 对应）
+  var WS_ALLOWED = { doctor: 1, nurse: 1, admin: 1, family: 1 };
+  var WS_PING_INTERVAL = 25000;   // 心跳上行间隔
+  var WS_DEAD_TIMEOUT = 60000;    // 心跳无响应判定阈值
+  var POLL_INTERVAL = 30000;      // 断线轮询间隔（同时尝试重连）
+  var ELDER_STORAGE_KEY = "kb_wo_elder";
 
   function fmtTime(s) {
     if (!s) return "—";
@@ -56,7 +63,9 @@
 
     var role = opts.role;
     var isStaff = role === "doctor" || role === "nurse";
-    var needStatusFilter = isStaff;
+    var wsAllowed = !!WS_ALLOWED[role];
+    // 状态筛选全部下推服务端：staff 用 mine（按本人已读/处理），admin/family 用 status
+    var needStatusFilter = true;
 
     var state = {
       q: "", sort: "created_at", order: "desc", statusFilter: "",
@@ -64,6 +73,8 @@
     };
     var ws = null;
     var pollTimer = null;
+    var pingTimer = null;
+    var lastPongAt = 0;
     var popupOpen = false;
 
     // ---------- 骨架 ----------
@@ -75,10 +86,18 @@
       ["priority:asc", "优先级（低→高）"],
     ];
 
+    var statusOptions = isStaff
+      ? [["", "全部"], ["unread", "未读"], ["read", "已读"], ["handled", "已处理"]]
+      : [["", "全部"]].concat(Object.keys(STATUS_LABEL).map(function (k) {
+          return [k, STATUS_LABEL[k]];
+        }));
+
     root.innerHTML =
       "<div class='card'>" +
       "<div class='card-title'><h3>敏感事件工单</h3>" +
-      (isStaff ? "<span class='faint' data-ws>实时连接中…</span>" : "<span class='faint'>历史工单可查可搜</span>") +
+      (wsAllowed
+        ? "<span class='faint' data-ws>实时连接中…</span>"
+        : "<span class='faint'>历史工单可查可搜</span>") +
       "</div>" +
       "<div class='toolbar wo-toolbar'>" +
       "<input type='search' data-q placeholder='搜索关键词：类别 / 触发原句 / 处理方案' />" +
@@ -90,13 +109,16 @@
       "</select>" +
       (needStatusFilter
         ? "<select data-status><option value=''>全部</option>" +
-          "<option value='pending'>未处理</option><option value='handled'>已处理</option></select>"
+          statusOptions.slice(1).map(function (o) {
+            return "<option value='" + o[0] + "'>" + o[1] + "</option>";
+          }).join("") +
+          "</select>"
         : "") +
       (role === "family" ? "<select data-elder></select>" : "") +
       "<span class='spacer'></span>" +
       "<button class='btn btn-ghost btn-sm' data-refresh>刷新</button>" +
       "</div>" +
-      (needStatusFilter ? "<div class='faint' data-status-hint></div>" : "") +
+      "<div class='faint' data-status-hint></div>" +
       "<div data-list class='mt-8'></div>" +
       "<div class='toolbar' data-pager style='margin-top:12px;'></div>" +
       "</div>";
@@ -125,12 +147,20 @@
         sel.innerHTML = state.elders.map(function (e) {
           return "<option value='" + e.elder_id + "'>" + KB.esc(e.name) + "</option>";
         }).join("");
-        state.elderId = state.elders[0].elder_id;
-        sel.value = state.elderId;
+        // 恢复上次选择；不自动取第一个长者，未选择时展示空态且不发请求
+        var saved = sessionStorage.getItem(ELDER_STORAGE_KEY);
+        if (saved && state.elders.some(function (e) { return e.elder_id === saved; })) {
+          state.elderId = saved;
+          sel.value = saved;
+        }
         sel.addEventListener("change", function () {
-          state.elderId = this.value;
+          state.elderId = this.value || null;
+          if (state.elderId) sessionStorage.setItem(ELDER_STORAGE_KEY, state.elderId);
+          else sessionStorage.removeItem(ELDER_STORAGE_KEY);
           state.page = 1;
-          refresh();
+          state.items = [];
+          state.total = 0;
+          refresh(); // 切换长者：清空后重新拉取（WS 只作刷新信号，切换后主动拉一次）
         });
       }).catch(function () {
         state.elders = [];
@@ -143,18 +173,16 @@
       var p = "?page=" + state.page + "&page_size=" + state.pageSize +
         "&sort=" + encodeURIComponent(state.sort) + "&order=" + encodeURIComponent(state.order);
       if (state.q) p += "&q=" + encodeURIComponent(state.q);
+      // 状态筛选下推服务端：staff → mine，admin/family → status
+      if (state.statusFilter) {
+        p += isStaff
+          ? "&mine=" + encodeURIComponent(state.statusFilter)
+          : "&status=" + encodeURIComponent(state.statusFilter);
+      }
       if (role === "family") {
         return "/api/v1/family/elders/" + encodeURIComponent(state.elderId) + "/workorders" + p;
       }
       return (role === "admin" ? "/api/v1/admin/workorders" : "/api/v1/staff/workorders") + p;
-    }
-
-    function filteredItems() {
-      if (!state.statusFilter) return state.items;
-      return state.items.filter(function (it) {
-        var handled = it.my_status === "handled";
-        return state.statusFilter === "handled" ? handled : !handled;
-      });
     }
 
     function stateCell(it) {
@@ -167,12 +195,15 @@
     }
 
     function renderList() {
-      var rows = filteredItems();
+      var rows = state.items; // 服务端筛选/分页，不做客户端二次过滤
       if (!rows.length) {
-        KB.renderState(listBox, {
-          kind: "empty",
-          message: state.statusFilter ? "当前页没有符合条件的工单，可切换筛选或翻页" : "暂无工单，敏感事件命中后会自动建单",
-        });
+        var emptyMsg = "暂无工单，敏感事件命中后会自动建单";
+        if (role === "family" && !state.elderId) {
+          emptyMsg = "请选择长者查看工单与用药记录";
+        } else if (state.statusFilter) {
+          emptyMsg = "没有符合条件的工单，可切换筛选或翻页";
+        }
+        KB.renderState(listBox, { kind: "empty", message: emptyMsg });
         renderPager();
         return;
       }
@@ -204,10 +235,7 @@
 
     function renderPager() {
       var pages = Math.max(1, Math.ceil(state.total / state.pageSize));
-      var shown = filteredItems().length;
-      var info = state.statusFilter
-        ? "本页显示 " + shown + " 条 · 共 " + state.total + " 条"
-        : "共 " + state.total + " 条";
+      var info = "共 " + state.total + " 条"; // 服务端分页，直接以 total 为准
       pagerBox.innerHTML = "<span class='faint'>" + info + " · 第 " + state.page + "/" + pages + " 页</span>" +
         "<span class='spacer'></span>" +
         "<button class='btn btn-ghost btn-sm' data-prev" + (state.page <= 1 ? " disabled" : "") + ">上一页</button>" +
@@ -226,7 +254,8 @@
 
     function refresh() {
       if (role === "family" && !state.elderId) {
-        return KB.renderState(listBox, { kind: "empty", message: "暂无关联长者，请联系社区建立家属-长者关联" });
+        // 未选长者：空态且不发请求（不自动选第一个长者）
+        return KB.renderState(listBox, { kind: "empty", message: "请选择长者查看工单与用药记录" });
       }
       KB.renderState(listBox, { kind: "loading" });
       return KB.api("GET", listUrl()).then(function (res) {
@@ -273,7 +302,7 @@
       }).catch(function () { /* 轮询失败不打扰，下次再试 */ });
     }
 
-    // ---------- 员工端实时推送 ----------
+    // ---------- 四端实时推送 + 断线轮询兜底 ----------
 
     function setWsState(alive) {
       var el = root.querySelector("[data-ws]");
@@ -287,6 +316,7 @@
     }
 
     function notifyCreated(data) {
+      if (!isStaff) return; // 弹窗与角标仅 staff；admin/family 只刷新列表
       var info = data || {};
       KB.toast("新的敏感事件工单：" + (info.category || "未分类"), "error");
       if (popupOpen) return;
@@ -315,12 +345,61 @@
       });
     }
 
+    function pollTick() {
+      // staff 轮询「列表 + counts」；admin 只刷列表；family 刷当前选中长者列表
+      refresh();
+      refreshCounts();
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(function () {
+        pollTick();
+        if (!ws && wsAllowed) connectWs(); // 轮询期间持续尝试重连，成功即停止轮询
+      }, POLL_INTERVAL);
+      pollTick();
+      console.info("workorder_poll_fallback_started", { role: role });
+    }
+
+    function stopPolling() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+      console.info("workorder_poll_fallback_stopped", { role: role });
+    }
+
+    function stopHeartbeat() {
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+    }
+
+    function startHeartbeat() {
+      stopHeartbeat();
+      lastPongAt = Date.now();
+      pingTimer = setInterval(function () {
+        if (!ws || ws.readyState !== 1) return;
+        // 心跳无响应超过阈值：主动关闭，由 onclose 统一转轮询
+        if (Date.now() - lastPongAt > WS_DEAD_TIMEOUT) {
+          ws.close();
+          return;
+        }
+        try {
+          ws.send(JSON.stringify({ type: "ping" }));
+        } catch (e) { /* 发送失败等 onclose 兜底 */ }
+      }, WS_PING_INTERVAL);
+    }
+
     function connectWs() {
+      if (!wsAllowed) return;
       var token = sessionStorage.getItem("kb_token");
       if (!token) return;
+      if (ws) return;
       try {
         ws = new WebSocket(wsUrl());
       } catch (e) {
+        ws = null;
         setWsState(false);
         startPolling();
         return;
@@ -329,11 +408,17 @@
         ws.send(JSON.stringify({ type: "auth", token: token }));
         setWsState(true);
         stopPolling();
+        startHeartbeat();
       };
       ws.onmessage = function (ev) {
         var msg;
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
         var data = msg && msg.data ? msg.data : {};
+        if (msg.type === "pong") {
+          lastPongAt = Date.now();
+          return;
+        }
+        // counts 仅 staff 收到（服务端分组）；admin/family 只收刷新信号
         if (msg.type === "ticket.counts") {
           if (typeof data.unhandled === "number") setBadge(data.unhandled);
           return;
@@ -351,22 +436,11 @@
       };
       ws.onclose = function () {
         ws = null;
+        stopHeartbeat();
         setWsState(false);
         startPolling();
       };
       ws.onerror = function () { /* 关闭事件统一兜底 */ };
-    }
-
-    function startPolling() {
-      if (pollTimer) return;
-      pollTimer = setInterval(refreshCounts, 30000);
-      refreshCounts();
-    }
-
-    function stopPolling() {
-      if (!pollTimer) return;
-      clearInterval(pollTimer);
-      pollTimer = null;
     }
 
     // ---------- 详情 ----------
@@ -573,9 +647,14 @@
         state.statusFilter = this.value;
         var hint = root.querySelector("[data-status-hint]");
         if (hint) {
-          hint.textContent = state.statusFilter ? "状态筛选按处理项三态在当前页内生效，翻页仍按时间排序。" : "";
+          hint.textContent = state.statusFilter
+            ? (isStaff
+              ? "未读/已读按本人回执与本人处理项判定，筛选在服务端生效。"
+              : "状态筛选在服务端生效，翻页与搜索共用该条件。")
+            : "";
         }
-        renderList();
+        state.page = 1;
+        refresh(); // 筛选下推服务端，重新拉取而非仅过滤当前页
       });
     }
     root.querySelector("[data-refresh]").addEventListener("click", function () {
@@ -597,8 +676,9 @@
     if (isStaff) {
       ensureBadge();
       refreshCounts();
-      connectWs();
     }
+    // 四端挂载面板时即建立 WS 连接（admin 懒挂载 / family 直接挂载均满足）
+    connectWs();
 
     return api;
   }

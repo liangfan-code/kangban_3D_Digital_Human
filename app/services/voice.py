@@ -265,6 +265,24 @@ async def _create_work_order(
         )
         workorder_id = workorder.workorder_id
         await db.commit()
+        # commit 后属性已过期，先刷新再发布，避免 async 惰性加载报错
+        await db.refresh(workorder)
+    try:
+        from app.services.workorder_events import publish_workorder_event
+
+        await publish_workorder_event(
+            "ticket.created" if created else "ticket.updated", workorder
+        )
+    except Exception as exc:  # noqa: BLE001 —— 推送失败只降级，不影响建单结果
+        logger.warning(
+            "工单事件推送失败",
+            extra={
+                "event": "workorder_event_push_failed",
+                "object_type": "workorder",
+                "object_id": str(workorder_id),
+                "error": type(exc).__name__,
+            },
+        )
     logger.info(
         "敏感事件工单已落库" if created else "敏感事件工单重复触发已累加",
         extra={

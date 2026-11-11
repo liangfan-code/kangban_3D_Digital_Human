@@ -19,13 +19,16 @@ REPLY = "我听到您不舒服，已经帮您叫人了。"
 
 
 class _FakeSession:
-    """只记录 commit 次数的假会话。"""
+    """只记录 commit 次数的假会话（refresh 为空实现，供 commit 后刷新调用）。"""
 
     def __init__(self) -> None:
         self.commits = 0
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def refresh(self, obj) -> None:
+        return None
 
 
 def _fake_factory(session: _FakeSession):

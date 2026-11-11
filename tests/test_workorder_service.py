@@ -385,7 +385,7 @@ async def test_family_requires_valid_link(db_session, seed):
 async def test_list_item_exposes_type_and_order_kind(
     api, db_session, seed, auth_headers_factory
 ):
-    """段 1 契约扩展：列表返回 type/title/order_kind，已读字段在 1.5 前保持空。"""
+    """段 1 契约扩展：列表返回 type/title/order_kind；1.5 起 is_read 按账号回执取值。"""
     await _bind_doctor_and_nurse(db_session, seed)
     await _create(db_session, seed)
     headers = await auth_headers_factory("doctor")
@@ -396,7 +396,8 @@ async def test_list_item_exposes_type_and_order_kind(
     assert item["type"] == "sensitive"
     assert item["title"]
     assert item["order_kind"] == "one_off"
-    assert item["is_read"] is None
+    # staff 的 is_read 有语义：无回执即 False（不再用占位 None）
+    assert item["is_read"] is False
     assert item["read_at"] is None
 
 

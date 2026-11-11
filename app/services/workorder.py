@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,7 @@ from app.models import (
     Workorder,
     WorkorderDisposition,
     WorkorderEvent,
+    WorkorderRead,
 )
 from app.models.enums import (
     AccountRole,
@@ -204,24 +206,8 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
-async def _publish_event(
-    session: AsyncSession, event_type: str, workorder: Workorder
-) -> None:
-    """推送工单事件：延迟导入避免循环依赖；失败只记日志，不影响业务事务。"""
-    try:
-        from app.services.workorder_events import publish_workorder_event
-
-        await publish_workorder_event(event_type, workorder, session=session)
-    except Exception:
-        logger.warning(
-            f"工单事件推送失败: {event_type}",
-            extra={
-                "event": "workorder_event_push_failed",
-                "object_type": "workorder",
-                "object_id": str(workorder.workorder_id),
-            },
-            exc_info=True,
-        )
+# 注意：工单事件推送（publish_workorder_event）一律由 HTTP 路由层或语音服务
+# 在数据库事务 commit() 之后统一发布，服务层不做事务内推送（Day7 段1.5）。
 
 
 # ---- 建单 ----
@@ -275,7 +261,6 @@ async def create_sensitive_work_order(
             },
         )
         await session.flush()
-        await _publish_event(session, "ticket.updated", existing)
         logger.info(
             "敏感事件工单重复触发",
             extra={
@@ -322,7 +307,6 @@ async def create_sensitive_work_order(
         },
     )
     await session.flush()
-    await _publish_event(session, "ticket.created", workorder)
     logger.info(
         "敏感事件工单已创建",
         extra={
@@ -606,7 +590,11 @@ async def close_standing_work_order_for_plan(
 async def mark_read(
     session: AsyncSession, *, workorder_id: UUID, role: str, account_id: UUID
 ) -> WorkorderDisposition:
-    """该角色处理项 unread→read（幂等）；handled 不回退。"""
+    """按账号写已读回执 + 该角色处理项 unread→read（幂等）；handled 不回退。
+
+    语义写死：已读按账号（workorder_reads 回执，展示以此为准）、处理按角色
+    （disposition 三态，handled 仍是关闭门禁）。
+    """
     account = await _load_account(session, account_id)
     _require_staff_role(account, role)
     workorder = await _load_work_order(session, workorder_id)
@@ -614,29 +602,30 @@ async def mark_read(
         raise WorkOrderConflict("工单已关闭，不可再变更")
     disposition = await _load_disposition(session, workorder_id, role)
 
-    if disposition.status == WorkorderDispositionStatus.HANDLED:
-        return disposition
-    if disposition.status == WorkorderDispositionStatus.READ:
-        return disposition
-
-    disposition.status = WorkorderDispositionStatus.READ
-    disposition.read_at = _now()
-    disposition.account_id = account_id
-    if workorder.status == WorkorderStatus.OPEN:
-        workorder.status = WorkorderStatus.ACKNOWLEDGED
-    _add_event(
-        session,
-        workorder_id=workorder_id,
-        event_type="read",
-        actor_account_id=account_id,
-        actor_role=role,
+    # 1) 按账号插入回执（联合主键幂等，ON CONFLICT DO NOTHING）
+    await _insert_read_receipt(
+        session, workorder_id=workorder_id, account_id=account_id
     )
+
+    # 2) 处理项状态机：仅 unread→read；已 read/handled 不再变更、不回退
+    if disposition.status == WorkorderDispositionStatus.UNREAD:
+        disposition.status = WorkorderDispositionStatus.READ
+        disposition.read_at = _now()
+        disposition.account_id = account_id
+        if workorder.status == WorkorderStatus.OPEN:
+            workorder.status = WorkorderStatus.ACKNOWLEDGED
+        _add_event(
+            session,
+            workorder_id=workorder_id,
+            event_type="read",
+            actor_account_id=account_id,
+            actor_role=role,
+        )
     await session.flush()
-    await _publish_event(session, "ticket.updated", workorder)
     logger.info(
         "工单处理项已读",
         extra={
-            "event": "workorder_read",
+            "event": "workorder_read_receipt",
             "object_type": "workorder",
             "object_id": str(workorder_id),
             "actor_id": str(account_id),
@@ -644,6 +633,19 @@ async def mark_read(
         },
     )
     return disposition
+
+
+async def _insert_read_receipt(
+    session: AsyncSession, *, workorder_id: UUID, account_id: UUID
+) -> bool:
+    """插入按账号已读回执；已存在时幂等跳过。返回是否新插入。"""
+    stmt = (
+        pg_insert(WorkorderRead)
+        .values(workorder_id=workorder_id, account_id=account_id, read_at=_now())
+        .on_conflict_do_nothing(index_elements=["workorder_id", "account_id"])
+    )
+    result = await session.execute(stmt)
+    return bool(result.rowcount)
 
 
 async def submit_disposition(
@@ -682,7 +684,6 @@ async def submit_disposition(
         payload={"role": role, "plan_length": len(plan)},
     )
     await session.flush()
-    await _publish_event(session, "ticket.updated", workorder)
     logger.info(
         "工单处理方案已提交",
         extra={
@@ -752,7 +753,6 @@ async def close_work_order(
         payload={"roles_completed": [str(role) for role in STAFF_ROLES]},
     )
     await session.flush()
-    await _publish_event(session, "ticket.resolved", workorder)
     logger.info(
         "工单已终审关闭",
         extra={
@@ -817,6 +817,46 @@ async def get_work_order(
     return workorder
 
 
+def _mine_conditions(role: str, account_id: UUID, mine: str | None) -> list[Any]:
+    """构造 ``mine`` 筛选条件（仅 staff 语义，非法值/非 staff 角色 → 422）。
+
+    - unread：无本人回执 且 本人角色处理项未 handled；
+    - read：有本人回执 且 本人角色处理项未 handled；
+    - handled：本人角色处理项已 handled。
+    """
+    if role not in STAFF_ROLES:
+        raise WorkOrderValidationError("当前角色不支持 mine 筛选")
+
+    role_unhandled = exists(
+        select(WorkorderDisposition.disposition_id).where(
+            WorkorderDisposition.workorder_id == Workorder.workorder_id,
+            WorkorderDisposition.role == role,
+            WorkorderDisposition.status != WorkorderDispositionStatus.HANDLED,
+        )
+    )
+    role_handled = exists(
+        select(WorkorderDisposition.disposition_id).where(
+            WorkorderDisposition.workorder_id == Workorder.workorder_id,
+            WorkorderDisposition.role == role,
+            WorkorderDisposition.status == WorkorderDispositionStatus.HANDLED,
+        )
+    )
+    own_receipt = exists(
+        select(WorkorderRead.account_id).where(
+            WorkorderRead.workorder_id == Workorder.workorder_id,
+            WorkorderRead.account_id == account_id,
+        )
+    )
+
+    if mine == "unread":
+        return [~own_receipt, role_unhandled]
+    if mine == "read":
+        return [own_receipt, role_unhandled]
+    if mine == "handled":
+        return [role_handled]
+    raise WorkOrderValidationError("mine 仅支持 unread | read | handled")
+
+
 async def list_work_orders(
     session: AsyncSession,
     *,
@@ -825,12 +865,17 @@ async def list_work_orders(
     elder_id: UUID | None = None,
     q: str | None = None,
     status: str | None = None,
+    mine: str | None = None,
     sort: str = "created_at",
     order: str = "desc",
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Workorder], int]:
-    """按角色可见范围返回工单列表与总数；q 匹配标题/类别/触发原句/方案全文。"""
+    """按角色可见范围返回工单列表与总数；q 匹配标题/类别/触发原句/方案全文。
+
+    ``mine`` 仅 staff 语义（unread=本人未读且角色未 handled / read=本人已读且
+    角色未 handled / handled=角色已处理）；其他值抛 422（上层映射）。
+    """
     conditions: list[Any] = []
 
     if role == AccountRole.FAMILY:
@@ -846,6 +891,8 @@ async def list_work_orders(
         conditions.append(Workorder.elder_id == elder_id)
     if status and status in set(WorkorderStatus):
         conditions.append(Workorder.status == status)
+    if mine is not None:
+        conditions.extend(_mine_conditions(role, account_id, mine))
 
     keyword = (q or "").strip()
     if keyword:
@@ -905,7 +952,11 @@ async def list_work_orders(
 async def count_open_by_role(
     session: AsyncSession, *, role: str, account_id: UUID
 ) -> int:
-    """该账号可见范围内、该角色处理项未 handled 且工单未关闭的数量。"""
+    """「该账号未读且该角色处理项未 handled 且工单未关闭」的数量。
+
+    已读按账号：本人存在 workorder_reads 回执即不计入；非 staff 返回 0
+    （admin/family 不发 counts）。
+    """
     if role not in STAFF_ROLES:
         return 0
     account = await _load_account(session, account_id)
@@ -924,6 +975,14 @@ async def count_open_by_role(
             )
         )
     )
+    conditions.append(
+        ~exists(
+            select(WorkorderRead.account_id).where(
+                WorkorderRead.workorder_id == Workorder.workorder_id,
+                WorkorderRead.account_id == account_id,
+            )
+        )
+    )
 
     return int(
         (
@@ -932,6 +991,26 @@ async def count_open_by_role(
             )
         ).scalar_one()
     )
+
+
+async def list_receipts(
+    session: AsyncSession, *, account_id: UUID, workorder_ids: list[UUID]
+) -> dict[UUID, datetime]:
+    """批量加载某账号的已读回执时间，供列表/详情填充 is_read/read_at。"""
+    receipts: dict[UUID, datetime] = {}
+    if not workorder_ids:
+        return receipts
+    rows = (
+        await session.execute(
+            select(WorkorderRead.workorder_id, WorkorderRead.read_at).where(
+                WorkorderRead.account_id == account_id,
+                WorkorderRead.workorder_id.in_(workorder_ids),
+            )
+        )
+    ).all()
+    for workorder_id, read_at in rows:
+        receipts[workorder_id] = read_at
+    return receipts
 
 
 # ---- 上下文快照 ----
