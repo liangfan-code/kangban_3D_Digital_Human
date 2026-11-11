@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -23,6 +24,7 @@ from app.models import (
     DoctorElderAssignment,
     Elder,
     FamilyElderLink,
+    MedicationPlan,
     Room,
     Workorder,
     WorkorderDisposition,
@@ -31,7 +33,9 @@ from app.models import (
 from app.models.enums import (
     AccountRole,
     AssignmentStatus,
+    MedicationPlanStatus,
     WorkorderDispositionStatus,
+    WorkorderOrderKind,
     WorkorderPriority,
     WorkorderSource,
     WorkorderStatus,
@@ -41,9 +45,20 @@ logger = get_logger(__name__)
 
 # 工单类型与终态
 SENSITIVE_TYPE = "sensitive"
+MEDICATION_PLAN_TYPE = "medication_plan"
+MISSED_MEDICATION_TYPE = "missed_medication"
 CLOSED_STATUSES = (WorkorderStatus.RESOLVED, WorkorderStatus.CANCELLED)
 STAFF_ROLES = (AccountRole.DOCTOR, AccountRole.NURSE)
 SNAPSHOT_MAX_TURNS = 5
+MISSED_REASON_CODES = frozenset(
+    {"retry_exhausted", "timeout_exhausted", "startup_backfill", "no_device"}
+)
+# 这些计划状态下，长期用药工单不允许管理员手工关闭
+STANDING_ACTIVE_PLAN_STATUSES = (
+    MedicationPlanStatus.PLANNED,
+    MedicationPlanStatus.ACTIVE,
+    MedicationPlanStatus.PAUSED,
+)
 
 
 class WorkOrderError(Exception):
@@ -320,6 +335,271 @@ async def create_sensitive_work_order(
     return workorder, True
 
 
+# ---- 用药计划长期工单 / 漏服工单 ----
+
+
+def _medication_plan_description(plan: MedicationPlan) -> str:
+    """长期工单描述：只放药名/剂量/服用时间/说明，绝不放 internal_note。"""
+    schedule = plan.schedule or {}
+    times = "、".join(schedule.get("times") or [])
+    parts = [
+        f"药品：{plan.drug_name}",
+        f"剂量：{plan.dose}",
+        f"服用时间：{times or '未设置'}",
+    ]
+    if plan.instructions:
+        parts.append(f"用药说明：{plan.instructions}")
+    return "；".join(parts)
+
+
+async def create_medication_plan_work_order(
+    session: AsyncSession,
+    *,
+    plan: MedicationPlan,
+    doctor_account_id: UUID,
+) -> tuple[Workorder, bool]:
+    """创建/复用长期用药工单；同一 plan_id 未关闭的 standing 工单只保留一张。"""
+    existing = (
+        await session.execute(
+            select(Workorder)
+            .where(
+                Workorder.medication_plan_id == plan.plan_id,
+                Workorder.order_kind == WorkorderOrderKind.STANDING,
+                Workorder.status.not_in(CLOSED_STATUSES),
+            )
+            .order_by(Workorder.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+
+    workorder = Workorder(
+        elder_id=plan.elder_id,
+        type=MEDICATION_PLAN_TYPE,
+        source=WorkorderSource.MANUAL,
+        priority=WorkorderPriority.NORMAL,
+        status=WorkorderStatus.OPEN,
+        title=f"长期用药计划：{plan.drug_name}",
+        description=_medication_plan_description(plan),
+        order_kind=WorkorderOrderKind.STANDING,
+        medication_plan_id=plan.plan_id,
+        effective_from=plan.start_date,
+        effective_until=plan.end_date,
+    )
+    session.add(workorder)
+    await session.flush()
+
+    now = _now()
+    session.add_all(
+        [
+            WorkorderDisposition(
+                workorder_id=workorder.workorder_id,
+                role=AccountRole.DOCTOR,
+                status=WorkorderDispositionStatus.HANDLED,
+                account_id=doctor_account_id,
+                plan_text="发起长期用药计划",
+                handled_at=now,
+            ),
+            WorkorderDisposition(
+                workorder_id=workorder.workorder_id,
+                role=AccountRole.NURSE,
+                status=WorkorderDispositionStatus.UNREAD,
+            ),
+        ]
+    )
+    _add_event(
+        session,
+        workorder_id=workorder.workorder_id,
+        event_type="created",
+        payload={
+            "source": "doctor_medication_plan",
+            "order_kind": WorkorderOrderKind.STANDING.value,
+            "archive_roles": [AccountRole.ADMIN.value],
+            "plan_id": str(plan.plan_id),
+        },
+    )
+    await session.flush()
+    logger.info(
+        "长期用药工单已创建",
+        extra={
+            "event": "medication_plan_workorder_created",
+            "object_type": "workorder",
+            "object_id": str(workorder.workorder_id),
+            "plan_id": str(plan.plan_id),
+            "elder_id": str(plan.elder_id),
+            "actor_id": str(doctor_account_id),
+            "actor_role": AccountRole.DOCTOR,
+        },
+    )
+    return workorder, True
+
+
+async def create_missed_medication_work_order(
+    session: AsyncSession,
+    *,
+    order: Any,
+    reason_code: str,
+) -> tuple[Workorder, bool]:
+    """全仓唯一漏服建单入口；dedupe_key + 部分唯一索引共同防重。"""
+    if reason_code not in MISSED_REASON_CODES:
+        raise WorkOrderValidationError("漏服原因码不合法")
+
+    plan = await session.get(MedicationPlan, order.plan_id)
+    if plan is None:
+        raise WorkOrderNotFound("用药计划不存在")
+
+    dedupe_key = f"missed:{order.order_id}"
+
+    def _accumulate(existing: Workorder) -> tuple[Workorder, bool]:
+        existing.occurrence_count = (existing.occurrence_count or 1) + 1
+        _add_event(
+            session,
+            workorder_id=existing.workorder_id,
+            event_type="occurrence",
+            payload={
+                "occurrence_count": existing.occurrence_count,
+                "reason_code": reason_code,
+            },
+        )
+        return existing, False
+
+    existing = (
+        await session.execute(
+            select(Workorder).where(Workorder.dedupe_key == dedupe_key).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        result = _accumulate(existing)
+        await session.flush()
+        return result
+
+    workorder = Workorder(
+        elder_id=order.elder_id,
+        type=MISSED_MEDICATION_TYPE,
+        source=WorkorderSource.MANUAL,
+        priority=WorkorderPriority.HIGH,
+        status=WorkorderStatus.OPEN,
+        title=f"用药漏服：{plan.drug_name}",
+        description=(
+            f"时段：{order.scheduled_at.isoformat()}；"
+            f"尝试次数：{order.attempt_count or 0}；原因码：{reason_code}"
+        ),
+        order_kind=WorkorderOrderKind.ONE_OFF,
+        medication_plan_id=order.plan_id,
+        medication_order_id=order.order_id,
+        dedupe_key=dedupe_key,
+    )
+    try:
+        async with session.begin_nested():
+            session.add(workorder)
+            await session.flush()
+    except IntegrityError:
+        # 并发下唯一键兜底：回滚保存点后重查并累加次数
+        existing = (
+            await session.execute(
+                select(Workorder).where(Workorder.dedupe_key == dedupe_key).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            raise
+        result = _accumulate(existing)
+        await session.flush()
+        return result
+
+    session.add_all(
+        [
+            WorkorderDisposition(
+                workorder_id=workorder.workorder_id,
+                role=role,
+                status=WorkorderDispositionStatus.UNREAD,
+            )
+            for role in STAFF_ROLES
+        ]
+    )
+    _add_event(
+        session,
+        workorder_id=workorder.workorder_id,
+        event_type="created",
+        payload={
+            "source": "missed_medication",
+            "order_kind": WorkorderOrderKind.ONE_OFF.value,
+            "reason_code": reason_code,
+            "medication_order_id": str(order.order_id),
+        },
+    )
+    await session.flush()
+    logger.info(
+        "漏服工单已创建",
+        extra={
+            "event": "workorder_created",
+            "object_type": "workorder",
+            "object_id": str(workorder.workorder_id),
+            "medication_order_id": str(order.order_id),
+            "plan_id": str(order.plan_id),
+            "elder_id": str(order.elder_id),
+            "reason_code": reason_code,
+        },
+    )
+    return workorder, True
+
+
+async def close_standing_work_order_for_plan(
+    session: AsyncSession,
+    *,
+    plan_id: UUID,
+    actor_account_id: UUID,
+    reason: str,
+) -> Workorder | None:
+    """计划停用/取消时系统关闭长期工单：绕过双角色 handled 门禁，只写库不推送。"""
+    workorder = (
+        await session.execute(
+            select(Workorder)
+            .where(
+                Workorder.medication_plan_id == plan_id,
+                Workorder.order_kind == WorkorderOrderKind.STANDING,
+                Workorder.status.not_in(CLOSED_STATUSES),
+            )
+            .order_by(Workorder.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if workorder is None:
+        return None
+
+    account = await _load_account(session, actor_account_id)
+    actor_role = (
+        account.role
+        if account.role in (AccountRole.DOCTOR, AccountRole.ADMIN)
+        else AccountRole.DOCTOR
+    )
+    workorder.status = WorkorderStatus.CANCELLED
+    workorder.resolved_at = _now()
+    workorder.closed_by = actor_account_id
+    workorder.closed_note = reason
+    _add_event(
+        session,
+        workorder_id=workorder.workorder_id,
+        event_type="closed",
+        actor_account_id=actor_account_id,
+        actor_role=actor_role,
+        payload={"reason": reason, "by": "plan_cancel"},
+    )
+    await session.flush()
+    logger.info(
+        "长期用药工单已随计划关闭",
+        extra={
+            "event": "medication_plan_workorder_closed",
+            "object_type": "workorder",
+            "object_id": str(workorder.workorder_id),
+            "plan_id": str(plan_id),
+            "actor_id": str(actor_account_id),
+            "actor_role": actor_role,
+        },
+    )
+    return workorder
+
+
 # ---- 处理项状态机 ----
 
 
@@ -434,6 +714,14 @@ async def close_work_order(
     workorder = await _load_work_order(session, workorder_id)
     if workorder.status in CLOSED_STATUSES:
         raise WorkOrderConflict("工单已关闭，不可重复关闭")
+
+    if (
+        workorder.order_kind == WorkorderOrderKind.STANDING
+        and workorder.medication_plan_id is not None
+    ):
+        plan = await session.get(MedicationPlan, workorder.medication_plan_id)
+        if plan is not None and plan.status in STANDING_ACTIVE_PLAN_STATUSES:
+            raise WorkOrderConflict("长期用药工单随用药计划停用/取消自动关闭")
 
     rows = (
         await session.execute(

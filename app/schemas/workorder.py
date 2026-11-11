@@ -6,7 +6,7 @@
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,10 +27,19 @@ class WorkorderDispositionOut(BaseModel):
 class WorkorderListItem(BaseModel):
     id: uuid.UUID
     elder_id: uuid.UUID
+    type: str
+    title: str
     category: str | None = None
     status: str
     priority: str
     occurrence_count: int
+    order_kind: str = "one_off"
+    medication_plan_id: uuid.UUID | None = None
+    medication_order_id: uuid.UUID | None = None
+    effective_from: date | None = None
+    effective_until: date | None = None
+    is_read: bool | None = None
+    read_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     dispositions: list[WorkorderDispositionOut]
@@ -39,7 +48,6 @@ class WorkorderListItem(BaseModel):
 
 
 class WorkorderDetail(WorkorderListItem):
-    title: str
     description: str | None = None
     context_snapshot: list[dict[str, Any]] | None = None
     resolved_at: datetime | None = None
@@ -50,7 +58,6 @@ class WorkorderDetail(WorkorderListItem):
 class FamilyWorkorderDetail(WorkorderListItem):
     """家属只读详情：隐私边界要求不返回对话快照。"""
 
-    title: str
     description: str | None = None
     resolved_at: datetime | None = None
     closed_by: uuid.UUID | None = None

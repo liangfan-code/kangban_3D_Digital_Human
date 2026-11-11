@@ -1,29 +1,30 @@
 # Day7 改造提示词清单
 
 > 配套文档：`docs/Day7-改造方案.md`。
-> 用法：全文共 **7 段**，按段号顺序，一次只把**一段**的提示词整段复制给执行改造的 AI；每段独立可执行，不依赖"上一段说过什么"。
+> 用法：全文共 **8 段**（段 1、段 1.5、段 2–7），按段号顺序，一次只把**一段**的提示词整段复制给执行改造的 AI。段 1.5 起会显式引用前一段产出的表/接口；若实际代码与描述不一致，以代码为准并在交付说明中列出差异，不要按文档硬改。
 > 段间共用约定已写进每段提示词，复制时不要删减"约束"与"验收"。
 > 所有提示词都假设：工作区为项目根目录、虚拟环境在 `.venv`、本地 PostgreSQL(5433)/Redis(6379) 已启动、执行者先读 `AGENTS.md`。
 > **统一要求**：每段完成后只提交改动与验收结果给用户审查，**不要自行 `git commit` / `git push` / 打 tag**。
 
-## 全局禁止清单（7 段都适用）
+## 全局禁止清单（8 段都适用）
 
 - **不得重写/替换主控 Agent**（`app/agent/companion.py`）：只能在工具注册表增量加工具或改单个工具实现。
 - **不得修改任何已存在的 Alembic 迁移文件**：只允许新增迁移；旧迁移一行不改。
-- **不得替换/重建现有表结构**：只允许 ADD COLUMN、ADD TABLE、扩 CHECK；不得 DROP/RENAME 旧列、不得清空数据。
+- **不得 DROP/RENAME 旧列、不得清空数据**：只允许 ADD COLUMN、ADD TABLE、扩 CHECK、重建本次指定的 CHECK。
 - **不得引入未经批准的新框架**（前端框架、ORM、任务队列、向量库、Agent 框架）；只允许方案 §1.4 明确列出的 LangGraph 三件套。
-- **不得删改现有前端页面的结构与既有功能**：只能扩展 `doctor.html` / `family.html` / `workorders.js` 的用药相关部分。
-- **不得新建** `medication_orders` / `medication_events` / `nurse_elder_assignments`。
-- **不得做**消息通知、未读角标、看板/图表/统计大盘、家属 H5 日报。
+- **不得删改现有前端页面的结构与既有功能**：只能扩展 `doctor.html` / `nurse.html` / `admin.html` / `family.html` / `workorders.js` 的用药与实时相关部分。
+- **允许**新增 `medication_orders`、`medication_events`、`workorder_reads` 三张表；**仍不得新建** `nurse_elder_assignments`（护工按楼栋授权，不建人到人绑定）。
+- **不得做**站外通知（短信/微信/App 推送）、运营看板/图表/统计大盘、审批中心、家属 H5 日报；**允许**工单 WS、30 秒轮询、按账号回执与服药历史。
+- **禁止在数据库事务提交前调用 `publish_workorder_event`**：必须先 `commit()`，再推送；commit 前只构造轻量 DTO。
 - **外部依赖未配置时必须可启动**：不得让 import 失败阻塞应用启动；必须有明确降级与日志标记。
 - **不得执行** `git commit` / `git push` / 打 tag；不得写真实长者数据、密钥或模型权重。
 
 ---
 
-## 段 1｜医生端用药计划闭环：权限 + 确认 + 长期工单（对应 7.2-0 后端）
+## 段 1｜用药计划闭环 + 服药双表（权限 + 确认 + 长期工单 + 漏服建单，对应 7.2-0 后端）
 
 ```text
-【任务】Day7 段1：实现"医生端用药计划"的后端闭环——绑定医生可创建/修改计划，创建后进入待确认状态，医生确认后生成一张"长期用药工单"投递给护工，管理员可见并存档，家属只读可见。本段只做后端与数据库，不改前端页面。
+【任务】Day7 段1：实现"医生端用药计划"的后端闭环——绑定医生可创建/修改计划，创建后进入待确认状态，医生确认后生成一张"长期用药工单"投递给护工，管理员可见并存档，家属只读可见。同时建立"每个时段一条服药任务单 + 追加型服药事实"的双表与漏服建单函数（本段只造能力与接口，不接调度、不接图）。本段只做后端与数据库，不改前端页面。
 
 【背景】
 项目是康伴 3D 数字人康养陪伴系统（FastAPI + SQLAlchemy 2.x async + PostgreSQL + Alembic）。已有：
@@ -32,8 +33,10 @@
 - 护工-楼栋绑定：`nurse_building_assignments`；家属-长者绑定：`family_elder_links`；
 - 统一范围判定：`app/services/authorization.py#can_access_elder`（返回 ALLOWED / HIDDEN 等）；
 - 工单：`app/models/workorder.py`、`app/services/workorder.py`、`app/api/routes/workorders.py`，已有员工/管理员/家属三套路由与处理项、事件、关闭流程；
-- 用药计划表：`app/models/medication.py#MedicationPlan`，只有基础字段，没有作者、确认状态、工单关联。
-本段要按产品要求补齐用药计划的权限与投递，不重写已有鉴权和工单模块。
+- 用药计划表：`app/models/medication.py#MedicationPlan`，只有基础字段，没有作者、确认状态、工单关联；
+- **不存在** `medication_orders`（时段任务单）、`medication_events`（服药事实）、`workorder_reads`（按账号已读）三张表；
+- **不存在** `create_missed_medication_work_order`：`type="missed_medication"` 目前只出现在文档里，`app/` 下没有任何函数与调用点。
+本段要按产品要求补齐用药计划的权限、投递与服药事实落点，不重写已有鉴权和工单模块。
 
 【当前状态（先核对，不要凭记忆改）】
 1. 先读 `app/models/medication.py`、`app/models/workorder.py`、`app/models/assignment.py`、`app/services/authorization.py`、`app/auth/dependencies.py`、`app/services/workorder.py`、`app/api/routes/workorders.py`、`app/api/router.py`。
@@ -42,31 +45,73 @@
 4. 确认 `workorder_dispositions.role` 只允许 doctor/nurse（本段**不**增加 admin 处理项）。
 5. 确认现有角色依赖函数名（如 `require_role`）与当前账号依赖的用法，按 `app/api/routes/health_profile.py` 的既有写法接入。
 6. `alembic/versions/` 最新为 `0007_workorder_flow.py`；新迁移编号从 `0008` 起。
+7. 核对 `alembic/versions/0007_workorder_flow.py` 里 `ck_workorder_events_type`、`ck_workorder_events_actor_role`、`ck_workorders_source`、`ck_workorder_dispositions_role` 的实际定义；本段只重建事件类型 CHECK，其余三个不动。
+8. 全局搜索 `missed_medication`、`medication_orders`、`medication_events`，确认当前只存在于 `docs/`，不要假设已有实现。
 
 【目标】
-1. 新增迁移 `0008_medication_order_flow.py`：给用药计划加工商字段，给工单加长期语义，扩工单事件类型；不新建表、不改旧迁移。
+1. 新增迁移 `0008_medication_order_flow.py`：改 `medication_plans` / `workorders` / `workorder_events`，**新建** `medication_orders`、`medication_events`、`workorder_reads` 三张表；不改旧迁移。
 2. 新增用药计划领域服务与 API：创建草稿、读取、修改、确认、暂停、恢复、取消。
 3. 权限写死：只有"绑定该长者且绑定有效"的医生可以创建/修改/确认/暂停/恢复/取消；其他角色（含未绑定医生）一律不能。
 4. 确认后生成一张长期工单：护工在楼栋范围内可见并收到，管理员全量可见并存档，家属只读可见用药计划。
 5. 计划取消时系统关闭长期工单；计划仍生效时，管理员不能手工关闭该长期工单。
+6. 建立服药任务单/事实事件服务与漏服建单函数：本段只实现"建、查、改状态、写事实"的领域能力与只读接口；到点扫描、外呼、图推进留给段 3/4。
 
 【具体要求】
-一、迁移 `0008_medication_order_flow.py`
-- `medication_plans` 增加列（全部可空，避免影响既有数据）：
-  - `created_by_account_id` UUID，FK `accounts.account_id` ON DELETE SET NULL；
-  - `updated_by_account_id` UUID，同上；
-  - `confirmed_at` timestamptz，可空；
-  - `confirmed_by_account_id` UUID，同上；
-  - `workorder_id` UUID，FK `workorders.workorder_id` ON DELETE SET NULL；
-  - `internal_note` TEXT，可空（医生内部备注，家属不可见）。
-- `workorders` 增加列：
-  - `order_kind` VARCHAR(16) NOT NULL server_default `'one_off'`，CHECK IN (`'one_off'`,`'standing'`)；
-  - `medication_plan_id` UUID，FK `medication_plans.plan_id` ON DELETE SET NULL；
-  - `effective_from` DATE 可空；`effective_until` DATE 可空。
-- `workorder_events` 的事件类型 CHECK 追加 `'revised'`、`'confirmed'`（以实际约束名为准；只 drop/重建该 CHECK，不动数据）。
-- 索引：`ix_workorders_medication_plan (medication_plan_id)`、`ix_medication_plans_workorder (workorder_id)`。
-- downgrade 精确回退本迁移新增的列、约束、索引；不得删除旧表或旧列。
-- 同步修改 ORM 模型；字段名、类型、可空性与迁移一致。
+一、迁移 `0008_medication_order_flow.py`（严格按以下 10 条，一条不多一条不少）
+1. `medication_plans` 增加列（全部可空，避免影响既有数据）：
+   - `created_by_account_id` UUID，FK `accounts.account_id` ON DELETE SET NULL；
+   - `updated_by_account_id` UUID，同上；
+   - `confirmed_at` timestamptz，可空；
+   - `confirmed_by_account_id` UUID，同上；
+   - `workorder_id` UUID，FK `workorders.workorder_id` ON DELETE SET NULL；
+   - `internal_note` TEXT，可空（医生内部备注；`doctor/nurse/admin` 可见，家属接口永不返回）。
+2. 新建 `medication_orders`（每个计划每个时段一条任务单，**只存当前态**）。字段：
+   - `order_id` UUID PK；
+   - `plan_id` UUID NOT NULL FK `medication_plans(plan_id)` ON DELETE CASCADE；
+   - `elder_id` UUID NOT NULL FK `elders(elder_id)` ON DELETE CASCADE；
+   - `scheduled_at` TIMESTAMPTZ NOT NULL；
+   - `status` VARCHAR(16) NOT NULL DEFAULT `'pending'`，CHECK IN (`'pending'`,`'calling'`,`'confirmed'`,`'missed'`,`'skipped'`,`'cancelled'`)；
+   - `attempt_count` INTEGER NOT NULL DEFAULT 0 CHECK >= 0；`last_attempt_at` TIMESTAMPTZ NULL；
+   - `confirmed_at` TIMESTAMPTZ NULL；`confirmed_source` VARCHAR(16) NULL CHECK IN (`'voice'`,`'text'`)；
+   - `skip_reason` TEXT NULL（仅员工可见，家属接口不返回）；
+   - `created_at` / `updated_at` TIMESTAMPTZ NOT NULL DEFAULT now()。
+
+3. 新建 `medication_events`（追加型事实，**只 INSERT，不 UPDATE/DELETE**）。字段：
+   - `event_id` UUID PK；
+   - `order_id` UUID NOT NULL FK `medication_orders(order_id)` ON DELETE CASCADE；
+   - `plan_id` UUID NOT NULL FK `medication_plans(plan_id)` ON DELETE CASCADE；
+   - `elder_id` UUID NOT NULL FK `elders(elder_id)` ON DELETE CASCADE；
+   - `event_type` VARCHAR(24) NOT NULL，CHECK IN (`'created'`,`'reminded'`,`'confirmed'`,`'denied'`,`'timeout'`,`'missed'`,`'skipped'`,`'cancelled'`)；
+   - `source` VARCHAR(16) NOT NULL，CHECK IN (`'scheduler'`,`'voice'`,`'text'`,`'staff'`,`'family'`,`'system'`)；
+   - `actor_account_id` UUID NULL FK `accounts(account_id)` ON DELETE SET NULL；
+   - `actor_role` VARCHAR(16) NULL，CHECK IN (`'doctor'`,`'nurse'`,`'admin'`,`'family'`) —— **不含 `system`**；
+   - `payload` JSONB NULL（只放元数据：attempt/channel/reason_code/workorder_id）；
+   - `dedupe_key` VARCHAR(160) NULL；`created_at` TIMESTAMPTZ NOT NULL DEFAULT now()。
+   - 幂等键规则：`reminded:{order_id}:{attempt}`、`missed:{order_id}`、`confirmed:{order_id}`、`created:{order_id}:{source}`。
+   - 系统动作 `actor_role` 写 `NULL`，**禁止**写字符串 `"system"`（现有 `ck_workorder_events_actor_role` 也不允许）。
+4. `workorders` 增加列：
+   - `order_kind` VARCHAR(16) NOT NULL server_default `'one_off'`，CHECK IN (`'one_off'`,`'standing'`)；
+   - `medication_plan_id` UUID，FK `medication_plans.plan_id` ON DELETE SET NULL；
+   - `medication_order_id` UUID，FK `medication_orders.order_id` ON DELETE SET NULL（**只在这一侧存关联**，`medication_orders` 不加 `workorder_id`）；
+   - `effective_from` DATE 可空；`effective_until` DATE 可空；
+   - `dedupe_key` VARCHAR(160) 可空。
+5. 新建 `workorder_reads`（按账号已读回执；本段只建表，写入逻辑在段 1.5）：
+   - `workorder_id` UUID NOT NULL FK `workorders(workorder_id)` ON DELETE CASCADE；
+   - `account_id` UUID NOT NULL FK `accounts(account_id)` ON DELETE CASCADE；
+   - `read_at` TIMESTAMPTZ NOT NULL DEFAULT now()；
+   - PRIMARY KEY (`workorder_id`, `account_id`)。
+
+6. 重建 `ck_workorder_events_type` 为 7 种：`created/read/disposition/closed/occurrence/confirmed/revised`（只 drop 该 CHECK 再重建，不动数据）。
+7. 索引与唯一键：
+   - `uq_medication_orders_plan_scheduled (plan_id, scheduled_at)` —— **任务单幂等边界**；
+   - `uq_medication_events_dedupe_key (dedupe_key) WHERE dedupe_key IS NOT NULL`；
+   - `uq_workorders_dedupe_key (dedupe_key) WHERE dedupe_key IS NOT NULL` —— **漏服工单防重**；
+   - `ix_medication_orders_elder_scheduled (elder_id, scheduled_at DESC)`、`ix_medication_orders_status_scheduled (status, scheduled_at)`；
+   - `ix_medication_events_order_created (order_id, created_at)`、`ix_medication_events_plan_created (plan_id, created_at)`；
+   - `ix_workorders_medication_plan (medication_plan_id)`、`ix_medication_plans_workorder (workorder_id)`。
+8. 同步 ORM：新增 `app/models/medication_order.py`（两个模型），修改 `app/models/medication.py`、`app/models/workorder.py`（加 `WorkorderRead`）；字段名、类型、可空性、约束名与迁移一致；在 `app/models/__init__.py` 注册。
+9. **不改** `ck_workorders_source`（仍只有 `sensitive/manual`）、`ck_workorder_events_actor_role`、`ck_workorder_dispositions_role`（仍只有 doctor/nurse）。建单一律 `source=manual`。
+10. `downgrade` 精确回退本迁移新增的列、三张新表、约束与索引；不得删除旧表或旧列。迁移文件头部注释写清"为什么建双表"（工单是派单语义，不能表达每个时段的服药任务；图状态与日志不可查询，家属历史无落点）。
 
 二、可编辑字段与校验（新增 `app/schemas/medication.py`）
 - 创建/修改只允许这些字段：`drug_name`、`dose`、`schedule`、`instructions`、`internal_note`、`start_date`、`end_date`。
@@ -85,9 +130,12 @@
 - `create_plan(db, *, elder_id, payload, account)`：校验医生绑定 → 写 `status=PLANNED`、`created_by_account_id`。
 - `list_plans(db, *, elder_id, account, status=None)`：按角色范围过滤；护士只能看到 `active/paused/completed`，**不得看到 `planned` 草稿**；医生/管理员可看全部；家属走独立接口。
 - `get_plan(db, *, plan_id, account)`：同一套范围判定；越权按"角色不符 403 / 范围外 404"。
-- `update_plan(db, *, plan_id, payload, account)`：只允许 `planned/active/paused`；`cancelled/completed` 返回 409；写 `updated_by_account_id`；若有长期工单，追加 `revised` 事件（payload 含 before/after，仅入库，不进日志）。
-- `confirm_plan(db, *, plan_id, account)`：仅 `planned → active`；写 `confirmed_at/by`；创建或复用长期工单；返回计划 + `workorder_id`；非 `planned` 返回 409。
-- `pause_plan / resume_plan / cancel_plan`：使用现有枚举；`cancel_plan` 调系统关闭长期工单。
+- `update_plan(db, *, plan_id, payload, account)`：只允许 `planned/active/paused`；`cancelled/completed` 返回 409；写 `updated_by_account_id`；若有长期工单，追加 `revised` 事件（仅入库，不进日志），payload 结构写死：
+  - `{"plan_version": n, "changes": [{"field": "<白名单字段>", "before": <旧值>, "after": <新值>}]}`；`plan_version` = 该计划已有 `confirmed/revised` 事件中 `payload.plan_version` 最大值 + 1；
+  - `changes` 只收白名单可编辑字段（`drug_name`/`dose`/`schedule`/`instructions`/`start_date`/`end_date`/`internal_note`），且只收**实际发生变化的字段**；`schedule` 的 before/after 存完整对象；无实际变化时不写 `revised` 事件；
+  - `internal_note` 只记 `{"field": "internal_note", "changed": true}`，**绝不记录旧值/新值**（该字段同时进 `changes` 数组，但只有 `changed` 键）。
+- `confirm_plan(db, *, plan_id, account)`：仅 `planned → active`；写 `confirmed_at/by`；创建或复用长期工单；写 `confirmed` 事件，`payload={"plan_version": 1, "workorder_id": "..."}`（确认即版本 1，后续 `revised` 在其上递增）；返回计划 + `workorder_id`；非 `planned` 返回 409。
+- `pause_plan / resume_plan / cancel_plan`：使用现有枚举；`cancel_plan` 必须先调用 `medication_order.cancel_orders_for_plan` 取消未终态任务单，再调系统关闭长期工单；两步同一事务。
 - 权限辅助：
   - 写操作先 `require_role("doctor")`（路由层），服务层再调 `can_access_elder`；非 ALLOWED 视为 404；
   - 读操作按角色：admin 放行；doctor/nurse/family 必须 `can_access_elder == ALLOWED`；
@@ -102,88 +150,260 @@
 - `POST /api/v1/medication-plans/{plan_id}/confirm`：确认并下发，200。
 - `POST /api/v1/medication-plans/{plan_id}/pause`、`/resume`、`/cancel`：200。
 - `GET /api/v1/family/elders/{elder_id}/medication-plans`：家属只读；返回全部状态（含 `cancelled/completed`），但**永不返回 `planned` 草稿**，不含 `internal_note`。
-- `GET /api/v1/family/elders/{elder_id}/medication-plans/{plan_id}/history`：家属只读修改记录；从长期工单的 `revised` 事件生成，字段白名单（时间、变更字段、变更前/后值），**过滤 `internal_note` 的内容与字段名**；若无记录返回空数组。
+- `GET /api/v1/family/elders/{elder_id}/medication-plans/{plan_id}/history`：家属只读修改记录；**数据来源**是该计划关联长期工单上的 `revised` 与 `confirmed` 事件（按 `event.created_at` 升序返回），字段映射固定：
+  - `time` ← `event.created_at`；
+  - `actor` ← `event.actor_role`（只返回角色，不返回 `actor_account_id`）；
+  - `plan_version` ← `payload.plan_version`；
+  - `changes` ← `payload.changes`（只透出 `field`/`before`/`after`）；
+  - **过滤规则**：`field == "internal_note"` 的项整条丢弃（不返回字段名、不返回 `changed` 标记、不返回值）；未知字段同样丢弃；无事件或全部被过滤时返回空数组。
+  - `confirmed` 事件没有 `changes`（空数组），前端按 `plan_version` 显示"计划已确认"，不得伪造字段变更。
+- `GET /api/v1/family/elders/{elder_id}/medication-history?plan_id=&from=&to=&page=&page_size=`：家属只读**服药历史**，数据来自 `medication_orders` + `medication_events`：
+  - 权限：`family_elder_links` 有效（`status=active` 且未过期），否则 404；
+  - `items[]` 字段白名单：`order_id`、`plan_id`、`drug_name`、`dose`、`scheduled_at`、`status`、`attempt_count`、`confirmed_at`、`confirmed_source`、`events[]`；`events[]` 只含 `event_type`、`source`、`created_at`；
+  - **绝不返回**：`internal_note`、`actor_account_id`、`skip_reason`、`workorder_id`、`device_id`、`payload` 原文；
+  - 分页默认 30、最大 100；`from/to` 可选，无范围时按 `scheduled_at DESC` 返回全部历史。
+- `GET /api/v1/elders/{elder_id}/medication-orders?status=&from=&to=`：员工核对用（doctor 绑定范围内 / nurse 本楼栋 / admin 全量），可返回 `skip_reason` 与 `medication_order_id` 关联的 `workorder_id`；家属一律 403。
+- 说明：字段级历史**不存在于** `workorders`（原地覆盖的快照）或现有事件（只记动作不记值），只能依赖 `0008` 新增的 `revised` 事件；不得回头改历史事件。
 - 所有写接口返回明确错误：角色不符 403、范围外 404、状态不允许 409、参数错 422。
 - 设备/语音侧不直接调这些 HTTP 接口，仍通过工具读服务层（段 3 实现）。
 
-五、确认后生成长期工单（修改 `app/services/workorder.py`）
-- 新增 `create_medication_plan_work_order(db, *, plan, doctor_account_id)`：
+五、工单写入（修改 `app/services/workorder.py`）
+- 新增 `create_medication_plan_work_order(session, *, plan, doctor_account_id)`：
   - `type="medication_plan"`、`source=WorkorderSource.MANUAL`、`priority=WorkorderPriority.NORMAL`、`status=OPEN`；
   - `order_kind="standing"`、`medication_plan_id=plan.plan_id`；
   - `effective_from=plan.start_date`、`effective_until=plan.end_date`；
   - `title` 用"长期用药计划：{drug_name}"；`description` 只放药名/剂量/服用时间/用药说明，**不放 `internal_note`**（家属会看到 description）；
   - 处理项：医生行 `role=doctor`、`status=handled`、`account_id=doctor_account_id`、`plan_text="发起长期用药计划"`、`handled_at=now`；护士行 `role=nurse`、`status=unread`、`account_id=NULL`；
   - 写一条 `created` 事件，payload 至少含 `{"source":"doctor_medication_plan","order_kind":"standing","archive_roles":["admin"],"plan_id":"..."}`；
-  - 沿用现有工单创建后的广播方式（参考 `create_sensitive_work_order` 的 WS/事件发布），让护工端能实时刷新；
   - 幂等：同一 `plan_id` 已有 `order_kind=standing` 且未关闭的工单时复用，不重复建单。
+- 新增 `create_missed_medication_work_order(session, *, order, reason_code)`（**全仓唯一漏服建单入口**，段 3/4 只调用不重写）：
+  - 入参 `order` 是 `medication_orders` 行；`reason_code` 取 `retry_exhausted / timeout_exhausted / startup_backfill / no_device` 之一；
+  - 字段：`type="missed_medication"`、`source=WorkorderSource.MANUAL`、`priority=WorkorderPriority.HIGH`、`status=OPEN`、`order_kind="one_off"`、`medication_plan_id=order.plan_id`、`medication_order_id=order.order_id`、`dedupe_key=f"missed:{order.order_id}"`；
+  - `title=f"用药漏服：{drug_name}"`（`drug_name` 从计划读取）；`description` 只写时段/尝试次数/原因码，**不写对话原文、不写 `internal_note`**；
+  - 处理项 doctor/nurse 各一条 `unread`；写一条 `created` 事件，`actor_role=None`、`actor_account_id=None`；
+  - 去重：先按 `dedupe_key` 查；再插入并捕获 `IntegrityError`（唯一键 `uq_workorders_dedupe_key`），回滚到保存点后重查；命中则 `occurrence_count += 1` 并写 `occurrence` 事件；返回 `(workorder, created: bool)`。
 - 修改 `close_work_order`：当 `order_kind=="standing"` 且关联计划状态为 `planned/active/paused` 时，抛业务冲突（HTTP 409），提示"长期用药工单随用药计划停用/取消自动关闭"；计划已 `cancelled/completed` 时允许关闭。
-- 新增系统关闭函数 `close_standing_workorder_for_plan(db, *, plan, reason, account)`：不经过管理员权限校验，置 `status=CANCELLED`，写 `closed` 事件；事件 `actor_role/actor_account_id` 用触发取消的医生账号（`ck_workorder_events_actor_role` 只允许 doctor/nurse/admin/family，不能写 `"system"`），payload 含 reason；仅由 `cancel_plan` 调用。
+- 新增 `close_standing_work_order_for_plan(session, *, plan_id, actor_account_id, reason)`：**绕过** `close_work_order` 的双角色 `handled` 门禁，置 `status=CANCELLED`、写 `closed_by/closed_note`、追加 `closed` 事件（`actor_role` 取发起医生；若由管理员触发则为 `admin`，`payload={"reason": reason, "by": "plan_cancel"}`）；仅由 `cancel_plan` 调用；**只写库**，由路由在 `commit()` 后推送 `ticket.resolved`。
+- 本段所有建单/关闭函数只负责写库与返回 DTO，**不自行 publish**；统一由路由在 `commit()` 成功之后调用 `publish_workorder_event`，**禁止在 commit 前推送**（否则客户端刷新看不到数据；提交失败还会留下幽灵事件）。
 
 六、工单契约（修改 `app/schemas/workorder.py`）
-- 员工/管理员/家属的工单列表项与详情增加只读字段：`order_kind`、`medication_plan_id`、`effective_from`、`effective_until`。
+- 员工/管理员/家属的工单列表项与详情增加只读字段：`order_kind`、`medication_plan_id`、`medication_order_id`、`effective_from`、`effective_until`。
+- 列表项补齐 `type`、`title`（`sensitive_category` 只覆盖敏感事件；长期用药与漏服的 `sensitive_category` 为 NULL，没有 `type/title` 会显示"未分类"）。
+- 列表项补齐 `is_read: bool | None`、`read_at: datetime | None`：本段先在 schema 预留字段并返回 `None`；实际值由段 1.5 接 `workorder_reads` 后填充。
 - 家属工单详情继续不返回 `context_snapshot`；长期用药工单的 `description` 已按第五点去除内部备注。
 - 不改变现有状态机、处理项接口与权限。
 
-七、审计与日志
-- 结构化日志（只记元数据，不记 `instructions/internal_note` 原文）：`medication_plan_created`、`medication_plan_confirmed`、`medication_plan_revised`、`medication_plan_paused/resumed/cancelled`、`medication_plan_workorder_created/closed`。
-- 每条日志带 `elder_id`、`plan_id`、`account_id`、`role`、`workorder_id`、`trace_id`（若上下文已有）。
+七、服药任务单与事实事件服务（新增 `app/services/medication_order.py`，只做领域能力）
+- `ensure_order(session, *, plan, scheduled_at, created_source="scheduler") -> MedicationOrder`：`INSERT ... ON CONFLICT (plan_id, scheduled_at) DO NOTHING` 后回读；命中已有终态（`confirmed/missed/skipped/cancelled`）直接返回；新建时写 `created` 事件（`source=created_source`、`actor_role=None`、`dedupe_key=f"created:{order_id}:{created_source}"`）。`created_source` 只允许 `scheduler/voice/text`，段 4 用默认值，段 3 按对话入口传 `voice` 或 `text`。
+- `mark_reminded(session, *, order, attempt, channel)`：`status='calling'`、`attempt_count=attempt`、`last_attempt_at=now`；写 `reminded` 事件（`dedupe_key=f"reminded:{order_id}:{attempt}"`）。
+- `mark_confirmed(session, *, order, source)`：`status='confirmed'`、写 `confirmed_at/confirmed_source`；写 `confirmed` 事件（`dedupe_key=f"confirmed:{order_id}"`）；已 `confirmed` 时幂等返回。
+- `mark_denied_or_timeout(session, *, order, kind, retry_limit, reason_code=None)`：写 `denied`/`timeout` 事件；未耗尽则回 `pending`；耗尽置 `missed` 并写 `missed` 事件，再调用 `create_missed_medication_work_order`（`reason_code` 默认按 `retry_exhausted/timeout_exhausted`，启动补漏显式传 `"startup_backfill"`；`startup_backfill` 时**不写** `denied/timeout`，只写 `missed`，避免伪造"确实提醒过"）。
+- `mark_skipped(session, *, order, actor_account_id, actor_role, reason)`：只有 `doctor/nurse/admin/family` 可调用；`status='skipped'`、写 `skip_reason`；写 `skipped` 事件。
+- `cancel_orders_for_plan(session, *, plan_id)`：把未终态订单批量置 `cancelled`，每单写 `cancelled` 事件（`source='system'`、`actor_role=None`）。
+- `list_family_history(session, *, elder_id, plan_id=None, from_=None, to=None, page=1, page_size=30)`：按上方字段白名单组装，**在服务层完成脱敏**，不要把 ORM 行直接返回给路由。
+- 状态机与事件必须同一事务；`medication_events` 只 INSERT。`confirmed` 只能由长者语音/文字触发，员工与家属只能 `skipped`，**不得代替长者确认**。
+- 不得在本服务内写 `workorder` 表之外的推送；需要通知时由调用方 commit 后发布。
+
+八、审计与日志
+- 结构化日志（只记元数据，不记 `instructions/internal_note` 原文）：`medication_plan_created`、`medication_plan_confirmed`、`medication_plan_revised`、`medication_plan_paused/resumed/cancelled`、`medication_plan_workorder_created/closed`、`medication_order_created/confirmed/missed`。
+- 每条日志带 `elder_id`、`plan_id`、`order_id`、`account_id`、`role`、`workorder_id`、`trace_id`（若上下文已有）。
 - 修改计划的 before/after 只写工单事件 JSONB，不写应用日志。
 - 不把真实长者姓名、房间号、病史写入测试或日志。
 
-八、测试
+九、测试
 - 新增 `tests/test_medication_permissions.py`：
   - 绑定医生可创建/修改/确认；未绑定医生 404；护士/家属/管理员写操作 403；
   - 医生绑定过期后不可写；
   - 家属只读接口不含 `internal_note` 等敏感键；家属历史接口不返回 `internal_note` 字段名或内容；
+  - 家属服药历史不含 `skip_reason`/`workorder_id`/`actor_account_id`/`device_id`；
   - 护工只能读本楼栋长者的计划。
 - 新增 `tests/test_medication_plan_api.py`：
   - 创建为 `planned`；确认后 `active` 且 `workorder_id` 非空；
   - 重复确认 409；取消后工单 `cancelled`；
   - 修改可编辑字段成功，传只读字段 422；
-  - `schedule` 非法时间/星期/起止日期 422。
+  - `schedule` 非法时间/星期/起止日期 422；
+  - 版本链：确认后连续修改两次 `dose`（如 `5mg→10mg→5mg`），家属 `history` 返回两条、顺序正确（按 `event.created_at`）、每条 `before/after` 与 `plan_version` 正确；响应体全文不出现 `internal_note` 的值；同时改 `internal_note` 时 history 只增条数不露值。
+- 新增 `tests/test_medication_order.py`：
+  - 同一 `(plan_id, scheduled_at)` 调 `ensure_order` 两次只生成一条订单；
+  - `mark_confirmed` 幂等，`confirmed` 事件只有一条；
+  - 重试耗尽后 `status=missed` 且只建一张漏服工单；再调一次只累加 `occurrence_count`；
+  - `cancel_orders_for_plan` 只影响未终态订单；
+  - 家属历史分页与字段白名单。
 - 补充 `tests/test_workorder_service.py`：
   - 长期工单处理项为 doctor=handled、nurse=unread；
   - 管理员在计划生效时关闭 → 409；
-  - 计划取消后系统关闭成功；
+  - 计划取消后系统关闭成功（绕过 `handled` 门禁）；
   - 重复确认不产生第二张 standing 工单。
 
 【涉及文件】
-- 新增：`alembic/versions/0008_medication_order_flow.py`、`app/schemas/medication.py`、`app/services/medication_plan.py`、`app/api/routes/medication.py`、`tests/test_medication_plan_api.py`、`tests/test_medication_permissions.py`
-- 修改：`app/models/medication.py`、`app/models/workorder.py`、`app/schemas/workorder.py`、`app/services/workorder.py`、`app/api/router.py`、`tests/test_workorder_service.py`
-- 不改：`app/static/**`、`app/realtime/**`、`app/router/**`、`app/agent/**`、`app/auth/**`、旧 alembic 迁移
+- 新增：`alembic/versions/0008_medication_order_flow.py`、`app/models/medication_order.py`、`app/schemas/medication.py`、`app/schemas/medication_order.py`、`app/services/medication_plan.py`、`app/services/medication_order.py`、`app/api/routes/medication.py`、`tests/test_medication_plan_api.py`、`tests/test_medication_permissions.py`、`tests/test_medication_order.py`
+- 修改：`app/models/__init__.py`、`app/models/medication.py`、`app/models/workorder.py`、`app/schemas/workorder.py`、`app/services/workorder.py`、`app/api/router.py`、`tests/test_workorder_service.py`
+- 不改：`app/static/**`、`app/realtime/**`、`app/router/**`、`app/agent/**`、`app/auth/**`、旧 alembic 迁移、`app/services/workorder_events.py`（WS 四端在段 1.5）
 
 【必须遵守的约束】
 - 权限必须"角色 + 绑定"双层校验；不得只靠前端隐藏按钮。
 - 不得让护士/家属/管理员创建或修改用药计划；不得复用健康档案 ACL 放行。
-- 不新建 `medication_orders` / `medication_events` / `nurse_elder_assignments` 表；长期工单复用 `workorders`。
+- **允许**新建 `medication_orders`、`medication_events`、`workorder_reads`；**不得**新建 `nurse_elder_assignments`；长期工单复用 `workorders`。
 - 不新增 admin 处理项；管理员"存档"通过全量列表与 created 事件体现。
-- 家属接口字段白名单，绝不返回 `internal_note`。
+- `medication_events` 只 INSERT，不存对话原文、音频、PCM、`internal_note`。
+- `confirmed` 只能来自长者语音/文字；员工与家属只能 `skipped`。
+- 漏服建单只允许 `create_missed_medication_work_order` 一个入口；`dedupe_key` + 部分唯一索引必须同时存在。
+- 家属接口字段白名单，绝不返回 `internal_note`、`skip_reason`、`workorder_id`、`actor_account_id`、`device_id`。
+- 禁止在事务提交前调用 `publish_workorder_event`。
 - 不回改旧迁移；`0008` 的 downgrade 必须可回退。
-- 不实现通知推送、不做看板/图表、不改前端页面。
+- 不实现站外通知、不做看板/图表、不改前端页面。
 - 不执行 `git commit` / `git push` / 打 tag。
 - 不写真实长者数据；测试用"测试长者A/B"和通用药名（如"降压药"）。
 
 【验收标准】
-1. `alembic upgrade head` 成功；`\d medication_plans`、`\d workorders` 字段与索引正确；`downgrade` 可回退 `0008`。
-2. `pytest tests/test_medication_plan_api.py tests/test_medication_permissions.py tests/test_workorder_service.py -q` 全过；`ruff check .` 通过。
-3. 手工/接口验证：绑定医生创建 → `planned`；确认 → `active` + 一张 `order_kind=standing` 工单；护士端列表能看到；管理员列表能看到；家属只读接口能看到（含已取消/已完成历史与修改记录）且无内部备注。
+1. `alembic upgrade head` 成功；`\d medication_plans`、`\d workorders`、`\d medication_orders`、`\d medication_events`、`\d workorder_reads` 字段、约束、索引正确；`downgrade` 可回退 `0008`。
+2. `pytest tests/test_medication_plan_api.py tests/test_medication_permissions.py tests/test_medication_order.py tests/test_workorder_service.py -q` 全过；`ruff check .` 通过。
+3. 手工/接口验证：绑定医生创建 → `planned`；确认 → `active` + 一张 `order_kind=standing` 工单；护士端列表能看到；管理员列表能看到；家属只读接口能看到（含已取消/已完成历史与修改记录）且无内部备注；连续改两次剂量，家属 `history` 返回两条且 `before/after` 正确。
 4. 未绑定医生创建 → 404；护士/家属/管理员创建 → 403；重复确认 → 409。
 5. 计划取消 → 工单 `cancelled`；计划生效时管理员关闭工单 → 409。
-6. 日志抽查：无 `internal_note/instructions` 原文、无真实长者信息。
+6. 同一 `(plan_id, scheduled_at)` 连续调 `ensure_order` 两次，`SELECT count(*)` 为 1；重复调漏服建单，工单数仍为 1、`occurrence_count` 递增。
+7. 家属 `medication-history` 响应体全文不含 `internal_note`、`skip_reason`、`workorder_id`、`actor_account_id`、`device_id`。
+8. 日志抽查：无 `internal_note/instructions` 原文、无真实长者信息、无对话原文。
 
 【完成后请说明】
 - 迁移字段、约束、索引与 downgrade 验证结果；
 - 权限矩阵的实际实现位置与 403/404 口径；
 - 可编辑字段白名单与校验规则；
 - 确认流程与长期工单字段、处理项、事件、幂等逻辑；
-- 家属只读接口的字段白名单与历史/修改记录脱敏规则；
+- 双表状态机、事件映射、`dedupe_key` 规则与唯一键；
+- 漏服建单函数的签名、字段、去重与两个后续调用点（段 3/4）；
+- 系统关闭函数与 `close_work_order` 的分工；
+- 家属只读接口（计划/修改记录/服药历史）的字段白名单与脱敏规则；
 - 验收命令与真实输出；
-- 已知限制与降级路径（不新增 `medication_events`；家属历史来自工单事件）。
+- 已知限制与降级路径（本段不接调度与图；家属历史来自双表）。
 
 【本段不做什么】
 - 不改前端任何页面；不做 LangGraph、不做 APScheduler、不做反向 WebRTC、不做记忆/媒体/评测。
-- 不新建 `medication_orders` / `medication_events` / `nurse_elder_assignments`；不做通知、角标、看板。
+- 不新建 `nurse_elder_assignments`；不做站外通知、角标、看板。
 - 不修改 `app/agent/**`、`app/router/**`、`app/realtime/**`、`app/auth/**` 与任何旧迁移。
+- 不改 WS 鉴权与 `workorder_reads` 的写入逻辑（段 1.5）。
+```
+
+---
+
+## 段 1.5｜工单四端实时 + 30 秒轮询 + 按账号已读（对应 7.2-0 实时）
+
+```text
+【任务】Day7 段1.5：把工单事件通道从"仅医生/护士"扩到四端（doctor/nurse/admin/family），补 30 秒轮询兜底、按账号已读回执、服务端状态/本人筛选，并修复管理员推送死代码、家属无实时、护士已读是角色级三个问题。本段只做工单实时与已读，不改用药业务逻辑。
+
+【背景】
+项目已有工单三态处理项、审计事件与进程内事件总线。当前实现的问题（先核对，不要凭记忆改）：
+- `app/services/workorder_events.py` 的 `_resolve_recipients` 把全部启用管理员算进 recipients，但 `app/api/routes/workorders.py` 的 WS 鉴权只放行 doctor/nurse → 管理员永远收不到推送（死代码）。
+- `app/static/js/workorders.js` 的 `isStaff` 只含 doctor/nurse，仅 staff 调 `connectWs()`；`admin.html` 不建连接，家属页也不建 → "全量可见/家属可见"实际只能手动刷新。
+- `workorder_dispositions` 唯一键是 `(workorder_id, role)`，`mark_read` 按角色整行置 read 并覆盖 `account_id` → 一名护士已读，同楼栋所有护士都显示已读。
+- 家属接口 `list_family_workorders` 把 `status_filter=None` 写死；员工列表没有 `mine`；前端 `filteredItems()` 只过滤当前页 → 翻页后筛选失效。
+- 事件总线是进程内单例，多 worker 时只覆盖本进程，轮询是唯一兜底。
+
+【目标】
+1. 四端共用同一个 WS 角色常量，广播与接入同源，管理员与家属能实时收到刷新信号。
+2. 断线/心跳超时自动降级为 30 秒轮询，重连成功停止。
+3. 已读按账号落 `workorder_reads`；`handled` 仍按角色共享并继续作为关闭门禁。
+4. 列表补齐 `type/title/is_read/read_at`，`status`/`mine` 下推服务端分页。
+5. 管理员与家属只收刷新信号，不发 `ticket.counts`、不做角标、不做站外通知。
+
+【具体要求】
+一、唯一角色常量与四端鉴权（修改 `app/services/workorder_events.py`、`app/api/routes/workorders.py`）
+- 在 `app/services/workorder_events.py` 定义并导出：
+  - `WS_ROLES = frozenset({AccountRole.DOCTOR, AccountRole.NURSE, AccountRole.ADMIN, AccountRole.FAMILY})`；
+  - 原有 `STAFF_ROLES` 保持不变，继续用于"是否计算 counts/处理项"。
+- WS 路径仍为 `/api/v1/staff/ws`（历史命名，本段不改路径），但鉴权改成 `account.role in WS_ROLES`，且账号 `status=active`；非四端角色返回 4403 后关闭。
+- `_resolve_recipients` 与 WS 鉴权必须引用同一个 `WS_ROLES`，**禁止两处各写一份角色列表**。
+- 家属收件人解析：按工单的 `elder_id` 找 `family_elder_links`（`status=active`、`valid_until IS NULL OR valid_until > now()`）→ `accounts.role=family`、`accounts.status=active`；不满足的在广播时跳过，不做缓存。
+- 账号停用/角色变更不承诺实时生效：下次重连或下次轮询时生效，文档写明即可。
+
+二、广播分组（修改 `app/services/workorder_events.py`）
+- `_payload` 增加 `type`（工单类型，如 `medication_plan`/`missed_medication`/`sensitive`）；仍**不返回** `description`、`context_snapshot`、方案全文、长者原文。
+- `_dispatch` 分两组：
+  - staff（doctor/nurse）：`unhandled` 按"该账号未读且角色未 handled"计算；补发 `ticket.counts`；
+  - admin/family：**不发** `ticket.counts`、不计算 `unhandled`，只发 `ticket.created/updated/resolved` 刷新信号。
+- 家属只广播与该家属绑定长者相关的工单；管理员广播全量。
+- `event_type` 仍用既有四种；不新增事件类型。
+- 广播失败只记日志，不影响业务事务（保持现有行为）。
+- **修正既有推送时机**：`create_sensitive_work_order`、`mark_read`、`submit_disposition`、`close_work_order` 服务层不再调用 `publish_workorder_event`，改为返回 DTO，由 `app/api/routes/workorders.py` 在 `commit()` 之后统一发布；`app/services/voice.py#_create_work_order_safely` 同样改为 `commit()` 后发布。全局搜索确认没有"flush 后推送"的残留。
+
+三、按账号已读（修改 `app/services/workorder.py`）
+- 使用段 1 已建的 `WorkorderRead` 模型（本段不改模型、不新建迁移）：`workorder_id`、`account_id`、`read_at`，联合主键。
+- `mark_read`：
+  - 先 `INSERT INTO workorder_reads ... ON CONFLICT DO NOTHING`；
+  - 保留处理项 `unread→read` 与 `OPEN→ACKNOWLEDGED` 的既有行为，但**已读展示不再取处理项的 `account_id`**；
+  - 已 `handled` 时仍幂等返回，不回退。
+- `count_open_by_role` 改为"该账号未读且角色未 handled"：条件加 `NOT EXISTS (SELECT 1 FROM workorder_reads r WHERE r.workorder_id=... AND r.account_id=:account_id)`；非 staff 仍返回 0（admin/family 不发 counts）。
+- `_item_from` 返回 `is_read`（当前账号是否存在回执）与 `read_at`：staff 返回实际值；admin/family 返回 `None`。
+- 语义写死：**已读按账号、处理按角色**；角色级 `handled` 继续是关闭门禁，不允许用已读替代处理。
+
+四、列表与筛选契约（修改 `app/schemas/workorder.py`、`app/api/routes/workorders.py`）
+- `WorkorderListItem` 增加 `type`、`title`、`is_read`、`read_at`（段 1 已预留字段，本段填值）。
+- 列表接口统一支持 `status`（`WorkorderStatus` 值），家属接口 `list_family_workorders` 必须把参数透传，**不得再写死 `None`**。
+- 员工端新增 `mine=unread|read|handled`：
+  - `unread`：无本人回执且角色未 `handled`；
+  - `read`：有本人回执且角色未 `handled`；
+  - `handled`：角色处理项为 `handled`；
+  - admin/family 传 `mine` 返回 422（不静默忽略）。
+- 分页在服务端完成；前端不得再用 `filteredItems()` 过滤当前页。
+
+五、WS 生命周期（修改 `app/api/routes/workorders.py`、`app/static/js/workorders.js`）
+- 首帧 `auth` 成功后，服务端记录 `account_id/role/exp`；按 JWT `exp` 到期主动 `close(code=4401)`；账号停用不实时踢，下次重连拒绝。
+- 客户端每 25 秒发 `{"type":"ping"}`，服务端回 `{"type":"pong"}`；60 秒无上行由客户端主动关闭并进入轮询。
+- 单账号连接上限 3，超出时关闭最旧连接。
+- 前端四端统一：
+  - `connectWs()` 的守卫从 `isStaff` 改为 `role in {doctor,nurse,admin,family}`；
+  - `admin.html`、`family.html` 挂载工单面板时即建立连接（它们目前是懒加载面板，验收不能假设"登录即连接"）；
+  - `onclose/onerror/心跳超时` 启动 30 秒 `setInterval` 轮询；重连成功清除；
+  - staff 轮询"列表 + counts"；admin 轮询"列表"；family 轮询"当前选中长者的列表"。
+
+六、家属长者选择与空态（修改 `app/static/family.html`、`app/static/js/workorders.js`）
+- 增加长者选择器：选项来自家属绑定列表；选中值存 `sessionStorage` 的 `kb_wo_elder`；刷新后恢复。
+- 无选中长者：显示空态"请选择长者查看工单与用药记录"，**不发请求**；不要自动取第一个长者。
+- 切换长者：立即清空列表并重新拉取；同时切换 WS 订阅上下文（家属 WS 只用于刷新信号，切换后主动拉一次即可）。
+- 多长者家庭只展示当前选中长者，不做聚合看板。
+
+七、验收辅助与日志
+- 结构化日志：`workorder_ws_connected/disconnected/expired/limit_exceeded`、`workorder_read_receipt`、`workorder_poll_fallback_started/stopped`；只记 `account_id/role/workorder_id` 元数据，不记对话原文。
+- 不记录 JWT 原文、不记录长者姓名。
+
+【涉及文件】
+- 修改：`app/services/workorder.py`、`app/services/workorder_events.py`、`app/services/voice.py`（仅调推送时机）、`app/api/routes/workorders.py`、`app/schemas/workorder.py`
+- 修改：`app/static/js/workorders.js`、`app/static/admin.html`、`app/static/family.html`、`app/static/nurse.html`、`app/static/doctor.html`
+- 新增：`tests/test_workorder_realtime.py`、`tests/test_workorder_reads.py`
+- 不改：`app/models/**`（`WorkorderRead` 在段 1 已建）、`app/services/medication_plan.py`、`app/services/medication_order.py`、`app/graphs/**`、`app/realtime/**`、`alembic/**`（表已在 `0008`）
+
+【必须遵守的约束】
+- 广播与鉴权必须共用 `WS_ROLES`；不得出现第二份角色列表。
+- 不得给 admin/family 发 `ticket.counts`，不得做未读角标。
+- 已读不得替代处理：`handled` 仍是角色级、仍是关闭门禁。
+- 家属只能收/看与其有效绑定长者相关的数据；绑定失效或过期按不存在处理（404/不广播）。
+- 不得新增迁移、不得改 `0008`（表结构已就绪）。
+- 不做站外通知、不做看板/图表、不引入前端框架。
+- 不执行 `git commit` / `git push` / 打 tag。
+
+【验收标准】
+1. 管理员浏览器打开 `admin.html` 工单面板，另一个浏览器用护士账号新建工单 → 管理员列表在 3 秒内自动出现该工单（无需手动刷新）。
+2. 家属浏览器打开 `family.html` → 选择长者 → 护士创建该长者的工单 → 家属列表自动刷新；切换到未绑定长者时看不到任何数据。
+3. 两名护士分别登录：护士 A 点"标记已读"后，护士 B 的列表该工单仍是未读；A 的列表显示已读；`mine=unread|read` 结果符合预期。
+4. `mine`/`status` 在服务端生效：第 2 页数据仍符合筛选条件；admin/family 传 `mine` 返回 422。
+5. 手工断开 WS（关闭网络或后端）→ 前端 30 秒内开始轮询，列表仍能更新；恢复后停止轮询并重连。
+6. JWT 过期后连接被服务端关闭（`code=4401`），前端转轮询并获得 401。
+7. `pytest tests/test_workorder_realtime.py tests/test_workorder_reads.py tests/test_workorder_service.py -q` 全过；`ruff check .` 通过。
+
+【完成后请说明】
+- `WS_ROLES` 的唯一来源与四端鉴权结果；
+- 管理员/家属收件人解析规则与广播分组；
+- `workorder_reads` 的写入、`is_read/read_at` 生成与 `count_open_by_role` 的新口径；
+- 列表 `status/mine` 服务端筛选实现与分页验证；
+- 前端四端连接、心跳、轮询、家属选择器与空态；
+- 验收命令与真实输出；
+- 已知限制（进程内总线、多 worker、token 过期、单账号连接上限）。
+
+【本段不做什么】
+- 不改用药计划/服药双表的业务逻辑与接口。
+- 不改 LangGraph、调度器、反向 WebRTC、记忆、媒体、评测。
+- 不新增迁移、不改表结构、不做站外通知/角标/看板。
+- 不重写 `workorders.js` 的整体结构，只扩实时、已读、筛选与选择器。
 ```
 
 ---
@@ -191,7 +411,7 @@
 ## 段 2｜医生端最小界面 + 家属只读 + 工单页适配（对应 7.2-0 UI）
 
 ```text
-【任务】Day7 段2：在现有四端页面上补齐"用药计划"的最小可用界面——医生创建/修改/确认页，家属只读视图，护工/管理员工单页的长期工单标识。本段只改前端，不改后端业务逻辑与数据库。
+【任务】Day7 段2：在现有四端页面上补齐"用药计划"的最小可用界面——医生创建/修改/确认页，家属只读视图与服药历史时间线，护工端的长期工单标识与本人已读状态、管理员端的长期工单标识。本段只改前端展示，不改后端业务逻辑与数据库。
 
 【背景】
 项目前端是原生 HTML + JS，无框架。已有：
@@ -200,7 +420,7 @@
 - `app/static/nurse.html`、`app/static/admin.html`：护工/管理员工单页；
 - `app/static/js/workorders.js`：四端共用的工单列表/详情渲染；
 - `app/static/js/api.js`：`KB.api(method, path, body)`、`KB.requireRole(...)`、`KB.renderTopbar(...)` 等。
-上一段（段 1）已提供用药计划后端接口与长期工单字段。本段只消费这些接口。
+段 1 已提供用药计划、服药历史后端接口与长期工单字段；段 1.5 已提供四端 WS/轮询、按账号已读、`status/mine` 服务端筛选与家属长者选择器。本段只消费这些接口。
 
 【当前状态（先核对）】
 1. 打开 `app/static/doctor.html`、`app/static/family.html`、`app/static/js/workorders.js`、`app/static/js/api.js`，确认现有的长者卡片渲染、弹层/模态框写法、登录与角色校验方式。
@@ -209,13 +429,15 @@
    - `GET/PUT /api/v1/medication-plans/{plan_id}`
    - `POST /api/v1/medication-plans/{plan_id}/confirm|pause|resume|cancel`
    - `GET /api/v1/family/elders/{elder_id}/medication-plans`
-3. 确认工单列表项已返回 `order_kind`、`medication_plan_id`、`effective_from`、`effective_until`。
+   - `GET /api/v1/family/elders/{elder_id}/medication-history`
+3. 确认工单列表项已返回 `order_kind`、`medication_plan_id`、`medication_order_id`、`effective_from`、`effective_until`、`type`、`title`、`is_read`、`read_at`。
+4. 确认段 1.5 已在 `workorders.js` 提供：四端连接/轮询、家属长者选择器（`sessionStorage: kb_wo_elder`）、`status/mine` 服务端筛选。本段**复用**，不要另写一套选择器或筛选。
 
 【目标】
 1. 医生在现有面板完成"新建用药计划 → 确认页 → 确认下发"；也能修改、暂停、恢复、取消。
-2. 家属在现有页面看到只读用药计划，不含内部备注、没有编辑入口。
-3. 护工/管理员在现有工单页能看到"长期用药"工单；管理员不能关闭仍在生效的长期工单。
-4. 不新增页面、不引入前端框架、不做通知/图表。
+2. 家属在现有页面看到只读用药计划与**服药历史时间线**，不含内部备注、没有编辑入口。
+3. 护工在现有工单页能看到"长期用药"工单与本人已读状态；管理员能看到长期工单标识但不能关闭仍在生效的长期工单。
+4. 不新增页面文件、不引入前端框架、不做站外通知/图表。
 
 【具体要求】
 一、医生端（修改 `app/static/doctor.html`）
@@ -239,33 +461,46 @@
 - 在长者详情中新增"用药计划（只读）"区块：
   - 字段：药名、剂量、服用时间、星期、起止日期、用药说明、状态；
   - 状态筛选包含已取消/已完成；点开计划可查看"修改记录"时间线（时间、变更字段、变更前/后值）；
-  - 不显示内部备注（包括修改记录里的内部备注变更，只显示"内部备注已更新"）、不显示创建人/工单号、不显示任何编辑/暂停/取消按钮；
+  - 不显示内部备注（修改记录里 `internal_note` 变更项整条不渲染，不显示"已更新"占位）、不显示创建人/工单号、不显示任何编辑/暂停/取消按钮；
   - 空态文案："暂无用药计划"；
   - 接口失败时显示明确错误，不伪造数据。
-- 只调用 `GET /api/v1/family/elders/{elder_id}/medication-plans` 与 `.../{plan_id}/history`，不要复用医生接口。
+- 新增"服药历史"时间线，数据来自 `GET /api/v1/family/elders/{elder_id}/medication-history`：
+  - 每条按 `scheduled_at` 倒序显示：计划时段、药名、剂量、状态（已服/未服/已跳过/已取消）、尝试次数、确认时间；
+  - 展开可看 `events[]`（只显示事件类型、来源、时间），中文映射：`created→已生成任务`、`reminded→已提醒`、`confirmed→已确认`、`denied→已否认`、`timeout→超时`、`missed→漏服`、`skipped→已跳过`、`cancelled→已取消`；
+  - 分页"加载更多"，页大小 30；`from/to` 可选；
+  - 只渲染接口返回字段，**不得显示** `skip_reason`、`workorder_id`、`internal_note`、账号 UUID；
+  - 空态："暂无服药记录"。
+- 复用段 1.5 的长者选择器：未选长者时两个区块都显示"请选择长者"，不发请求；切换长者后一起刷新。
+- 只调用 `GET /api/v1/family/elders/{elder_id}/medication-plans`、`.../{plan_id}/history` 与 `.../medication-history`，不要复用医生/员工接口。
 
 三、工单页（修改 `app/static/js/workorders.js`）
 - 列表项与详情增加"长期用药"徽标：`order_kind === 'standing'` 时显示；一次性工单不显示。
+- 类别列用 `category || TYPE_LABEL[type]`（`medication_plan→长期用药`、`missed_medication→漏服`、`sensitive→敏感事件`），避免新增工单显示"未分类"。
+- 已读展示改用 `is_read`（本人维度）：员工端显示未读圆点；不再用处理项 `account_id` 推断"谁已读"。
+- 筛选：`status` 与 `mine=unread|read|handled` 直接作为请求参数交给服务端；删除当前页 `filteredItems()` 过滤逻辑。
 - 管理员端：当 `order_kind === 'standing'` 时隐藏或禁用"关闭工单"按钮，并提示"长期用药工单随用药计划停用/取消自动关闭"；不要只依赖后端 409。
 - 护工端：保留"标记已读/提交处理项"能力；提交处理项后工单仍保持打开（长期），不要在前端把状态改成已关闭。
+- 管理员/家属收到实时事件只做 `toast`（如"工单已更新"）并刷新列表；**不得**弹出员工向的"请尽快确认情况并填写处理方案 / 查看并处理"弹窗。
 - 不改变其他工单类型的展示与操作。
 
 四、通用要求
 - 复用现有 `KB.api`、`KB.requireRole`、`KB.renderTopbar` 与弹层样式；不引入 React/Vue/构建工具。
 - 所有用户可见文案用中文；时间显示统一 `YYYY-MM-DD HH:mm`。
-- 不在前端保存长者敏感信息到 localStorage；不写死 elder_id/plan_id。
-- 不修改后端 API、数据库、路由、实时模块。
+- 不在前端保存长者敏感信息到 localStorage（长者选择只存 `sessionStorage` 的 `kb_wo_elder`）；不写死 elder_id/plan_id。
+- 不改后端业务逻辑、数据库与迁移；实时连接与轮询复用段 1.5。
 
 【涉及文件】
 - 修改：`app/static/doctor.html`、`app/static/family.html`、`app/static/js/workorders.js`
+- 新增：`app/static/js/medication.js`（用药计划列表/确认页/服药历史渲染，供 doctor.html 与 family.html 共用；避免把两套逻辑塞进同一文件）
 - 可选修改：`app/static/js/api.js`（仅当现有 `KB.api` 不支持 PUT 时补方法）
 - 不改：`app/api/**`、`app/services/**`、`app/models/**`、`alembic/**`、`app/realtime/**`、`app/router/**`
 
 【必须遵守的约束】
 - 确认页必须展示全部字段并等待医生显式点击；禁止"保存即下发"。
-- 家属视图必须只读，且不得出现内部备注。
-- 不新增页面文件、不做通知/推送/图表/统计。
+- 家属视图必须只读，且不得出现内部备注、跳过原因、工单号。
+- 不新增页面文件（只新增 `medication.js` 一个脚本），不做站外通知/图表/统计。
 - 不引入前端框架、不改现有登录与角色校验逻辑。
+- 不重复实现段 1.5 的长者选择器、WS、轮询与筛选。
 - 不执行 `git commit` / `git push` / 打 tag。
 - 演示数据用虚构长者与通用药名，不写真实长者信息。
 
@@ -273,22 +508,23 @@
 1. 医生（绑定）：新建计划 → 出现确认页（全部字段可见）→ 确认下发 → 列表出现"生效中"与工单号；返回修改不会生成工单。
 2. 医生修改已生效计划 → 出现"原值→新值"确认页 → 确认后列表更新。
 3. 未绑定医生：看不到创建按钮；直接访问接口被后端拒绝，前端显示无权限提示。
-4. 家属：能看到只读计划与已取消/已完成历史，能看修改记录，页面无编辑按钮、无内部备注。
-5. 护工：工单列表出现"长期用药"标识；提交处理项后工单仍打开。
-6. 管理员：能看到该工单；"关闭"按钮对长期工单不可用。
+4. 家属：能看到只读计划与已取消/已完成历史，能看修改记录；能看服药历史（含已服/未服/跳过），展开事件正确；页面无编辑按钮、无内部备注、无跳过原因、无工单号。
+5. 护工：工单列表出现"长期用药"标识与本人未读圆点；点已读后圆点消失；提交处理项后工单仍打开；`mine` 筛选翻页仍生效。
+6. 管理员：能看到该工单；"关闭"按钮对长期工单不可用；收到实时更新只出现 toast，不出现处理弹窗。
 7. 浏览器控制台无未捕获异常；刷新页面后数据仍正确。
 
 【完成后请说明】
 - 医生端页面结构、确认页字段与交互；
-- 家属只读字段白名单；
-- 工单页长期标识与关闭按钮处理；
+- 家属只读字段白名单与服药历史时间线；
+- 工单页长期标识、`type/title`、本人未读圆点与 `status/mine` 筛选；
+- 管理员/家属 toast 与员工处理弹窗的区分；
 - 手工验收步骤与结果（四类角色各一条）；
-- 未覆盖的边界与已知限制（不做未读角标/通知，不做图表）。
+- 未覆盖的边界与已知限制（不做站外通知/角标，不做图表）。
 
 【本段不做什么】
-- 不改后端 API、服务层、模型、迁移、路由与实时模块；只消费段 1 已提供的接口。
-- 不新增页面文件，不引入 React/Vue/构建工具，不改现有登录与角色校验。
-- 不做消息通知、未读角标、看板/图表/统计大盘、家属 H5 日报。
+- 不改后端 API、服务层、模型、迁移、路由与实时模块；只消费段 1/1.5 已提供的接口。
+- 不新增页面文件（除 `medication.js`），不引入 React/Vue/构建工具，不改现有登录与角色校验。
+- 不做站外通知、未读角标、看板/图表/统计大盘、家属 H5 日报。
 - 不实现用药提醒播放、LangGraph、反向 WebRTC、记忆与媒体（后续段）。
 ```
 
@@ -304,18 +540,20 @@
 
 【当前状态（先核对代码，不要凭假设）】
 1. `app/agent/tools.py` 里 `medication_query` 是占位实现，固定返回"用药计划还没接入…"，标记 degraded=medication_not_configured。
-2. `app/models/medication.py` 已有 `medication_plans` 表（elder_id/drug_name/dose/schedule JSONB/instructions/start_date/end_date/status），但没有任何 service、API 或种子数据；`schedule` 的 JSON 形状未定义。
+2. `app/models/medication.py` 已有 `medication_plans` 表（elder_id/drug_name/dose/schedule JSONB/instructions/start_date/end_date/status）；段 1 已补齐作者/确认字段，并新建 `medication_orders`、`medication_events` 与 `app/services/medication_order.py`（`ensure_order`/`mark_*`/`list_family_history`）。本段直接复用，不重写。
 3. `pyproject.toml` **未安装 langgraph**；`apscheduler` 只在 optional-dependencies `infra` 中，lifespan 未接入（本段不要接）。
-4. `app/services/workorder.py` 只有 `create_sensitive_work_order`（type 固定为敏感事件、source=sensitive），不能直接复用来建漏服工单。
+4. `app/services/workorder.py` 已有段 1 新增的 `create_missed_medication_work_order(session, *, order, reason_code)`；本段只调用，**禁止另写建单逻辑**，也禁止改 `create_sensitive_work_order`。
 5. `app/router/service.py` 目前把"我要吃药"类请求映射到 `medication_query`；没有"我吃过药了/我没吃"的确认分支。
 6. `app/models/workorder.py` 的 `type` 是自由 VARCHAR，`source` CHECK 只允许 'sensitive'|'manual'。
 7. 主控 Agent 是自研 ReAct 循环（`app/agent/companion.py`），不是 LangGraph 图；本段把用药图封装成工具供其调用即可，**不要重写 Agent**。
+8. 段 3 **不接调度**：任务单由本段在"对话内触发确认"时按需 `ensure_order`；到点扫描与启动补漏在段 4。
 
 【目标】
 1. 安装 LangGraph 与 SQLite checkpointer，建立可复用的 checkpointer 工厂。
 2. 实现"用药确认图"：发起提醒 → 等待确认 → 已确认 / 重试（最多 3 次，循环回到提醒）/ 升级（建漏服工单）。
 3. 把图接入主控 Agent：老人问"我该吃什么药"能读到真实计划；老人说"我吃过药了/我没吃"能推进图状态。
-4. 状态可按 thread_id 持久化，进程重启后能读回 attempt/status 继续推进。
+4. 状态可按 `thread_id=medication:{order_id}` 持久化，进程重启后能读回 attempt/status 继续推进。
+5. **数据库里的订单状态是权威**：图每推进一次都同步写 `medication_orders` 与 `medication_events`；图状态只用于可恢复执行，不能当作服药事实。
 
 【具体要求】
 一、依赖
@@ -329,17 +567,19 @@
 - 禁止 `asyncio.new_event_loop`、禁止独立线程运行图/Saver；所有异步调用绑定当前运行循环。
 
 三、图定义（新增 `app/graphs/medication.py`）
-- State 至少包含：`elder_id`、`plan_id`、`drug_name`、`dose`、`attempt`(0–3)、`status`(calling/waiting_confirm/confirmed/retry/escalated/done)、`last_reply`、`device_id`、`workorder_id`、`updated_at`。
-- 节点：`prepare_reminder`（生成可朗读提醒话术，attempt+1，status=calling）、`await_confirm`（status=waiting_confirm，结束本轮）、`evaluate_reply`（按"吃了/没吃/等会儿"分流）、`create_missed_workorder`（建单，status=escalated）。
-- 边：START → 根据输入类型路由（start / reply）→ 对应节点；`evaluate_reply` 用条件边：确认→confirmed→END；未确认且 attempt<3→回到 `prepare_reminder`（**必须是真的循环边**）；attempt>=3→`create_missed_workorder`→END。
+- State 至少包含：`elder_id`、`plan_id`、`order_id`、`drug_name`、`dose`、`attempt`(0–3)、`status`(calling/waiting_confirm/confirmed/retry/escalated/done)、`last_reply`、`device_id`、`workorder_id`、`updated_at`。
+- 节点：`prepare_reminder`（生成可朗读提醒话术，attempt+1，status=calling）、`await_confirm`（status=waiting_confirm，结束本轮）、`evaluate_reply`（按"吃了/没吃/等会儿"分流）、`escalate_missed`（调用段 1 建单函数，status=escalated）。
+- 边：START → 根据输入类型路由（start / reply）→ 对应节点；`evaluate_reply` 用条件边：确认→confirmed→END；未确认且 attempt<3→回到 `prepare_reminder`（**必须是真的循环边**）；attempt>=3→`escalate_missed`→END。
 - **不要使用 LangGraph 的 interrupt / Command(resume=…)**：HITL 暂停恢复是 Day8 的内容。本段用"按轮推进"：每次调用图时带 `{"action": "start"}` 或 `{"action":"reply","reply":"..."}`。
-- `thread_id` 规则：`medication:{elder_id}:{plan_id}:{YYYY-MM-DD}`（Asia/Shanghai 日期），保证同一天同一计划只有一条确认流程，跨天自然重开。
-- 图的输入输出用 TypedDict/Pydantic 明确声明；对外只暴露两个函数：`start_confirmation(...)` 与 `submit_reply(...)`，都返回可朗读文本与当前状态摘要。
+- `thread_id` 规则固定为 `medication:{order_id}`（**不再用 plan+日期+时段**）：一条任务单一条确认流程，跨天/跨时段天然隔离；`order_id` 由段 1 的 `ensure_order` 生成。
+- **DB 权威**：`prepare_reminder` → `mark_reminded`；确认 → `mark_confirmed`；否认/超时 → `mark_denied_or_timeout`；升级 → `mark_denied_or_timeout` 内部建单。图状态只负责恢复执行，**不得只改图状态而不写库**。
+- 图的输入输出用 TypedDict/Pydantic 明确声明；对外只暴露两个函数：`start_confirmation(order_id, ...)` 与 `submit_reply(order_id, reply)`，都返回可朗读文本与当前状态摘要。
 
 四、用药服务（扩展 `app/services/medication_plan.py`；段 1 已建，不要另建重复服务）
 - 定义 `schedule` JSON 约定并写进 docstring：`{"times": ["08:00"], "weekdays": [0,1,2,3,4,5,6]}`（0=周一，缺省=每天）。
 - 提供：`list_active_plans(db, elder_id)`（status=active 且日期在有效期内）、`today_plans(db, elder_id)`、`format_plan_reply(plans)`（口语化、短句、不编造）。
 - 无计划时必须明确说"还没有登记用药计划"，绝不编造药名剂量；查询必须强制 `WHERE elder_id = :elder_id`。
+- 对话内触发确认时，先用 `medication_order.ensure_order(session, plan=plan, scheduled_at=当前时段, created_source="voice" 或 "text")` 取/建当天当前时段的订单，再把 `order_id` 交给图；**不要在工具层自造订单或自造 thread_id**。
 
 五、工具接入（修改 `app/agent/tools.py`）
 - `ToolContext` 当前只有 `elder_id/device_id/room_type`，没有数据库会话；工具内用 `app.db.session.get_session_factory()` 开一个短生命周期 `async with` 会话，用完即关，异常不得抛出到语音链路。
@@ -354,13 +594,11 @@
 - 该分支必须在规则层之前判定，避免"我吃过药了"被分类器当成查询计划；同时"我不吃药"仍走原拒绝分支（升级主控 Agent），不得被新词表吞掉。
 - 不得改动安全一票否决、10 条规则、多意图升级的既有顺序；改动后必须回归 `eval/fixtures/day6_golden_dev.jsonl`（用现有 `scripts/run_day6_golden.py`），通过数不得低于改动前。
 
-七、漏服工单（修改 `app/services/workorder.py`）
-- 新增 `create_missed_medication_work_order(session, *, elder_id, plan_id, drug_name, dose, attempts, occurred_on, device_id=None)`：
-  - `type="missed_medication"`、`source=WorkorderSource.MANUAL`、`priority=HIGH`、`status=OPEN`、`order_kind="one_off"`、`medication_plan_id=plan_id`；
-  - `title` 形如"用药漏服：{drug_name}"；`description` 只写计划/剂量/尝试次数/日期，不写对话原文；
-  - 同时创建 doctor/nurse 两条 `WorkorderDisposition`（UNREAD）与一条 `created` 事件，复用现有 `_add_event`；
-  - 同一 elder + 同一 plan + 同一日已存在未关闭的漏服工单时不重复建单，累加 `occurrence_count` 并写 `occurrence` 事件。
-- 不要修改 `create_sensitive_work_order` 的行为。
+七、漏服升级（**不新增建单逻辑**）
+- 图内 `escalate_missed` 只做三件事：把订单置 `missed`（若尚未）、写 `missed` 事件、调用段 1 的 `create_missed_medication_work_order(session, *, order=order, reason_code="retry_exhausted")`。
+- 禁止在本段另写 `create_missed_medication_work_order`、禁止自己拼 `type/title/dedupe_key`、禁止修改 `create_sensitive_work_order`。
+- 去重由段 1 的 `dedupe_key=f"missed:{order_id}"` + `uq_workorders_dedupe_key` 保证；本段只需验证"重复调用不新建"。
+- 图的 `workorder_id` 取自建单函数返回值，仅用于话术与状态摘要，不作为事实来源。
 
 八、种子数据（新增 `scripts/seed_medication_plan.py`）
 - 命令行脚本：指定 elder 姓名或 id，写入一条教学用计划（例如"降压药 1 片 每日 08:00"），`status` 必须置 `ACTIVE`（表默认是 `PLANNED`），并写 `start_date`。
@@ -368,43 +606,46 @@
 - 使用明确虚构的测试长者，不写真实姓名/房间号/病史；脚本重复执行要幂等或明确提示已存在。
 
 九、降级（未配置/依赖不可用时的行为，必须可跑）
-- 未安装 langgraph、Saver 打开失败、图执行异常：应用照常启动，不得抛到语音链路；`medication_query` 仍可用（直接查表），`medication_confirm` 退化为**单轮确认**（直接把"已服药/未服药"写入当日记录，不重试、不升级），返回可朗读话术。
+- 未安装 langgraph、Saver 打开失败、图执行异常：应用照常启动，不得抛到语音链路；`medication_query` 仍可用（直接查表），`medication_confirm` 退化为**单轮确认**（不重试、不升级），返回可朗读话术。
+- 单轮确认**也必须落库**：先 `ensure_order` 取当前时段订单，再调 `mark_confirmed`/`mark_denied_or_timeout` 写订单与事件；**禁止**只改图状态、只写内存、只打日志或只说"已记录"。
 - 结构化日志记 `event=medication_graph_degraded`、`degraded=medication_graph_unavailable` 与 `error_type`（不记长者原文）。
 - 降级时不得假装"已确认/已记录"；漏服兜底由段 4 的调度器负责，不得因降级而静默丢单。
 
 十、测试（新增 `tests/test_medication_graph.py`，补充 `tests/test_agent_tools.py`）
-- 至少覆盖：3 次"没吃"→escalated 且工单只建一次；"吃了"→confirmed 且不建工单；重启恢复（同一临时 sqlite 路径，新建图实例后读回 attempt/status）；跨 elder 隔离；无计划不编造；确认分支路由不误伤"我不吃药"。
+- 至少覆盖：3 次"没吃"→escalated 且工单只建一次；"吃了"→confirmed 且不建工单；**每次推进后 `medication_orders.status` 与 `medication_events` 都有对应记录**；重启恢复（同一临时 sqlite 路径，新建图实例后读回 attempt/status）；跨 elder 隔离；无计划不编造；确认分支路由不误伤"我不吃药"。
 - 单测不得依赖开发库；需要 DB 的用例用 `db_session` fixture（kangban_test），未配置时跳过。
 
 【涉及文件】
 - 新增：`app/graphs/__init__.py`、`app/graphs/checkpointer.py`、`app/graphs/medication.py`、`scripts/seed_medication_plan.py`、`tests/test_medication_graph.py`
-- 修改：`app/services/medication_plan.py`（扩展今日用药查询与确认状态，不重写段 1 的权限/确认/工单逻辑）
-- 修改：`pyproject.toml`（依赖）、`app/agent/tools.py`、`app/router/signals.py`、`app/router/service.py`、`app/services/workorder.py`、`tests/test_agent_tools.py`
-- 不改：`app/core/lifespan.py`、`app/realtime/**`、`app/static/**`、`alembic/**`
+- 修改：`app/services/medication_plan.py`（扩展今日用药查询，不重写段 1 的权限/确认/工单逻辑）
+- 修改：`pyproject.toml`（依赖）、`app/agent/tools.py`、`app/router/signals.py`、`app/router/service.py`、`tests/test_agent_tools.py`
+- 不改：`app/services/workorder.py`（只调用段 1 的建单函数）、`app/services/medication_order.py`（只调用）、`app/core/lifespan.py`、`app/realtime/**`、`app/static/**`、`alembic/**`
 
 【必须遵守的约束】
-- 不新增数据库表、不新增 Alembic 迁移、不改已执行迁移。
+- 不新增数据库表、不新增 Alembic 迁移、不改已执行迁移（双表在段 1 已建）。
 - 不实现 APScheduler、定时任务、反向 WebRTC、前端改动（下一段做）。
 - 不使用 `interrupt` / `Command(resume=...)`（Day8 内容）。
 - 不实现健康采集、健康决策、看板、HITL 落库（Day8 内容）。
+- **不得只改图状态**：每次状态推进必须同步写订单与事件；DB 是权威。
 - `elder_id` 只来自 `ToolContext` / Runtime Context，不接受模型、URL、前端传参。
-- 不记录长者对话原文、音频、PCM 到日志；只记元数据（elder_id、plan_id、attempt、status、耗时）。
+- 不记录长者对话原文、音频、PCM 到日志；只记元数据（elder_id、plan_id、order_id、attempt、status、耗时）。
 - 不下载模型权重、不调用未授权外部服务；未配置/不可用必须可见降级，禁止静默失败。
 - 保持 `ruff` 行宽 100；中文 docstring；不执行 git commit/push。
 
 【验收标准】
-1. `pytest tests/test_medication_graph.py tests/test_agent_tools.py -q` 全过。
+1. `pytest tests/test_medication_graph.py tests/test_agent_tools.py tests/test_medication_order.py -q` 全过。
 2. `ruff check .` 无新增告警。
-3. 手工：种子脚本建计划 → 文本/语音说"我该吃什么药"返回真实药名剂量；说"我吃过药了"返回已记录；连续 3 次"没吃"后数据库出现 type=missed_medication 的工单。
-4. 手工：重启后端后，用同一 thread_id 能读取到未完成的状态（提供一段可复现的验证脚本或测试）。
+3. 手工：种子脚本建计划 → 文本/语音说"我该吃什么药"返回真实药名剂量；说"我吃过药了"后 `medication_orders.status=confirmed` 且 `medication_events` 有 `confirmed`；连续 3 次"没吃"后订单 `missed`、`workorders` 出现 `type=missed_medication` 且只有一条。
+4. 手工：重启后端后，用同一 `thread_id=medication:{order_id}` 能读取到未完成状态并继续推进（提供可复现脚本或测试）。
 5. 回归：`scripts/run_day6_golden.py` 通过数不少于改动前，并提供改动前后数字。
 
 【完成后请说明】
 - 改动文件清单与每处改动目的；
-- 图结构（节点/边/条件）、thread_id 规则、State 字段；
+- 图结构（节点/边/条件）、`thread_id=medication:{order_id}` 规则、State 字段；
+- 每次状态推进对应的订单字段与事件类型；
 - Saver 文件位置与测试隔离方式；
 - 新增工具签名与返回话术；
-- 漏服工单字段与去重逻辑；
+- 漏服升级的调用点与"重复调用不新建"的验证；
 - 验收命令与真实输出；
 - 未完成项、已知风险与降级表现（未安装 LangGraph 时是否可跑）。
 
@@ -413,6 +654,7 @@
 - 不改现有路由的安全一票否决、10 条规则、多意图升级顺序；不重写分类器。
 - 不实现 APScheduler、定时任务、反向 WebRTC、前端改动（段 4）。
 - 不新增数据表、不加迁移、不改已存在迁移；不使用 `interrupt` / `Command(resume=...)`。
+- 不重写段 1 的 `create_missed_medication_work_order` 与 `medication_order` 服务。
 - 不做记忆、媒体、评测（段 5–7）；不做健康采集/决策/看板。
 ```
 
@@ -421,10 +663,10 @@
 ## 段 4｜定时外呼 + 反向 WebRTC（对应 7.2 后半）
 
 ```text
-【任务】Day7 段4：把"用药确认图"接到 APScheduler 定时任务，并实现服务端主动发起的反向 WebRTC 外呼（含超时重试与可见降级）。
+【任务】Day7 段4：把"用药确认图"接到 APScheduler 定时任务，并实现服务端主动发起的反向 WebRTC 外呼（含超时重试与可见降级）；每个时段先按唯一键幂等地生成服药任务单，应用启动时补漏。
 
 【背景】
-项目已有：三级路由 + 主控 Agent；`app/realtime/session.py` 实现了浏览器 offer → 服务器 answer 的单向收音（音频轨 recvonly）；`app/services/voice.py` 通过同源 WebSocket 下发 TTS 音频事件；上一段已实现用药确认 LangGraph 图、`medication_confirm` 工具与漏服建单函数。本段只做"到点主动叫长者吃药"，不做夜间健康外呼。
+项目已有：三级路由 + 主控 Agent；`app/realtime/session.py` 实现了浏览器 offer → 服务器 answer 的单向收音（音频轨 recvonly）；`app/services/voice.py` 通过同源 WebSocket 下发 TTS 音频事件；段 1 已实现 `medication_orders`/`medication_events` 双表、`ensure_order` 与 `create_missed_medication_work_order`；段 3 已实现用药确认 LangGraph 图与 `medication_confirm` 工具。本段只做"到点主动叫长者吃药"，不做夜间健康外呼。
 
 【当前状态（先核对）】
 1. `app/core/lifespan.py` 只启动 MCP 与释放引擎，没有调度器。
@@ -432,33 +674,44 @@
 3. `app/realtime/session.py` 的 `accept_offer` 把音频 transceiver 显式降为 recvonly。
 4. `app/services/voice.py` 的 `VoiceSessionManager` 只有 register/unregister/feed_pcm，没有按 device_id 取会话或发事件的方法。
 5. `app/static/js/voice.js` 只作为 offer 发起方，没有处理服务端 offer / 回 answer 的分支。
-6. 用药图接口（上一段）：`start_confirmation(...)`、`submit_reply(...)`，thread_id 为 `medication:{elder_id}:{plan_id}:{日期}`。
+6. 段 3 的图接口：`start_confirmation(order_id, ...)`、`submit_reply(order_id, reply)`，`thread_id=medication:{order_id}`；`order_id` 来自段 1 的 `ensure_order(plan, scheduled_at)`。
+7. `apscheduler` 只声明在 `pyproject.toml` 的 `optional-dependencies.infra`，默认未安装；未安装时应用必须照常启动并明确降级。
 
 【目标】
-1. 每天按 `medication_plans.schedule` 到点扫描，解析长者对应平板设备，主动发起提醒。
+1. 每天按 `medication_plans.schedule` 到点扫描，先为每个时段幂等生成一条 `medication_orders`，再解析长者平板设备发起提醒。
 2. 外呼优先走反向 WebRTC（服务端 offer + 下行 TTS 音轨），失败时降级为现有 WS TTS 通道并明确标记。
 3. 每次提醒等待 30 秒（可配置）；无回应记一次失败并回到图的重试循环；3 次后建漏服工单。
-4. 后端重启后继续当天未完成的确认流程，不从 attempt=1 重来。
+4. 后端重启后：①补扫当天已过期但未终态的时段并落 `missed` + 建单；②继续当天未完成的确认流程，不从 attempt=1 重来。
 5. 严格绑定 uvicorn 事件循环，不新建 loop、不起独立线程跑 aiortc。
+6. 单实例部署是默认前提；多实例只做到"不重复建单"（数据库唯一键兜底），不承诺不重复外呼，必须在文档与日志里写明。
 
 【具体要求】
 一、配置（`app/core/config.py`）
-- 新增（全部有安全默认值）：`medication_reminder_enabled: bool = True`、`medication_scan_interval_seconds: int = 30`、`medication_reminder_window_minutes: int = 5`（到点前后多少分钟内允许触发）、`medication_call_timeout_seconds: int = 30`、`medication_retry_limit: int = 3`。
+- 新增（全部有安全默认值）：`medication_reminder_enabled: bool = True`、`medication_scan_interval_seconds: int = 30`、`medication_reminder_window_minutes: int = 5`（到点前后多少分钟内允许触发）、`medication_call_timeout_seconds: int = 30`、`medication_retry_limit: int = 3`、`medication_backfill_lookback_hours: int = 24`（启动补漏只回看最近 N 小时，避免长时间停机后补出海量历史噪声）。
 - `.env.example` 只加占位/默认值说明，不写真实值。
 
 二、调度器（`app/core/lifespan.py` + 新增 `app/services/medication_scheduler.py`）
-- 使用 `AsyncIOScheduler(timezone=settings.app_timezone)`，在 lifespan 启动阶段创建并 `start()`，关闭阶段 `shutdown(wait=False)`。
+- `apscheduler` 属 `optional-dependencies.infra`：lifespan 内 try/except 导入；未安装、`medication_reminder_enabled=False` 或测试环境时**不启动调度器**，记 `event=medication_scheduler_unavailable`（含 `reason=not_installed/disabled/test`），应用照常启动。
+- 使用 `AsyncIOScheduler(timezone=settings.app_timezone)`，在 lifespan 启动阶段创建并 `start()`，关闭阶段 `shutdown(wait=False)`；`timezone` 必须与 `due` 判定一致（Asia/Shanghai），不要用 UTC 直接比 `schedule.times`。
 - 注册 interval job：`scan_due_medications`，`max_instances=1`、`coalesce=True`、`misfire_grace_time` 合理设置；job 内所有 await 都跑在 uvicorn loop 上。
-- `medication_reminder_enabled=False` 或测试环境不启动调度器；提供纯函数 `due_items(now, plans)` 便于单测（不连库）。
-- 扫描逻辑：
+- 提供纯函数 `due_items(now, plans)` 便于单测（不连库）。
+- 扫描逻辑（逐时段，**先建单再外呼**）：
   - 查 status=active、日期有效、`schedule.weekdays` 包含今天的计划；
-  - 对 `schedule.times` 中与当前时间差在窗口内的时段触发；
-  - 幂等：用当日 thread_id 读取图状态，若已 waiting_confirm/confirmed/escalated 则跳过；进程内再加一层 `(plan_id, 日期, 时段)` 去重缓存；
+  - 对 `schedule.times` 中与当前时间差在窗口内的时段，计算 `slot_dt`（Asia/Shanghai），调用 `order = await ensure_order(session, plan=plan, scheduled_at=slot_dt)`，`commit()` 后再外呼；
+  - 幂等三层：①数据库唯一键 `uq_medication_orders_plan_scheduled (plan_id, scheduled_at)`；②`order.status` 为终态（`confirmed/missed/skipped/cancelled`）直接跳过；③图状态已 `confirmed/escalated` 跳过；
+  - 进程内 `(plan_id, slot_dt)` 去重缓存只作性能优化，**不能替代数据库唯一键**；
   - 触发失败只记日志并继续下一个，不让一个计划拖垮整轮扫描。
+- 启动补漏（lifespan 启动阶段、调度器启动之前执行一次，只回看 `medication_backfill_lookback_hours`，默认 24 小时）：
+  - 对 `active` 计划枚举回看窗口内已过时段的计划时间；
+  - 缺订单的，先 `ensure_order` 再 `mark_denied_or_timeout(kind="timeout", retry_limit=0, reason_code="startup_backfill")`：订单落 `missed`，写 `created` + `missed` 事件，并建漏服工单；
+  - 对已存在 `pending/calling` 且已过期的订单，同样补落 `missed`；
+  - 补漏必须幂等：重复启动不得重复建单（`dedupe_key` 兜底），日志记 `event=medication_backfill_summary`（扫描数/补建数/跳过数，不记长者原文）；
+  - 补漏失败不得阻塞应用启动，只记错误并继续。
+- **单实例约束**：同一数据库只允许一个调度器实例；多实例部署时数据库唯一键保证"不重复建单"，但可能重复外呼，必须在 README/方案里写明，不得宣称已支持多实例。
 
 三、设备解析（新增 `app/services/outbound.py`）
 - 由 elder 找设备：`elders.room_id` + `elders.bed_no` → `devices`（status=active）；优先 `bed_no` 完全匹配，其次 `bed_no IS NULL` 的房间级设备；多个候选时取更新时间最新的一条并记警告。
-- 找不到设备：不发起外呼，记 `event=medication_call_no_device`，并调用上一段的漏服建单函数（原因写"设备未找到"），不要静默跳过。
+- 找不到设备：不发起外呼，记 `event=medication_call_no_device`；把该订单置 `missed`（写 `missed` 事件）并调用段 1 的 `create_missed_medication_work_order(session, *, order=order, reason_code="no_device")`，`commit()` 之后再 `publish_workorder_event("ticket.created", workorder)`；不要静默跳过。
 - 设备存在但 WS 未连接：走降级通道（见五）。
 
 四、反向 WebRTC（修改 `app/realtime/session.py`、`app/api/routes/voice.py`、`app/static/js/voice.js`）
@@ -478,9 +731,10 @@
 - 严禁静默失败：长者没听到、护工也看不到，是不允许的状态。
 
 六、超时与重试
-- 每次外呼后等待 `medication_call_timeout_seconds`；收到长者回复（语音/文字）立即 `submit_reply` 推进图。
-- 超时由调度器下一轮扫描判定（不要用长时间 sleep 占住 job）：比较图状态 `updated_at` 与当前时间，超时则调用 `submit_reply(reply="timeout")`，走图内的 retry 分支。
-- 达到 `medication_retry_limit` 后由图建漏服工单；调度器不重复建单。
+- 每次外呼后等待 `medication_call_timeout_seconds`；收到长者回复（语音/文字）立即 `submit_reply(order_id, ...)` 推进图。
+- 超时由调度器下一轮扫描判定（不要用长时间 sleep 占住 job）：取该订单对应 `thread_id=medication:{order_id}` 的图状态，比较 `updated_at` 与当前时间，超时则 `submit_reply(order_id, reply="timeout")`，走图内的 retry 分支。
+- 达到 `medication_retry_limit` 后由图调用 `mark_denied_or_timeout` 落 `missed` 并建漏服工单；调度器不重复建单。
+- 订单状态与图状态不一致时**以数据库为准**：先读 `medication_orders.status`，若已是终态则不重复外呼，只修图状态或直接跳过并记 `event=medication_state_mismatch`。
 
 七、失败四分类（外呼编排内必须体现）
 - 参数错（计划缺时段/格式非法）：不重试，记 `invalid_plan`，跳过并告警；
@@ -493,19 +747,26 @@
 - 输出：设备解析结果、外呼方式（rtc/ws）、耗时、当前图状态；不打印长者原文。
 
 九、测试（新增 `tests/test_outbound_scheduler.py`、`tests/test_outbound_call.py`）
-- 纯函数测试：`due_items` 的时段/星期/窗口/幂等；设备解析优先级；找不到设备时的行为。
+- 纯函数测试：`due_items` 的时段/星期/窗口/时区；设备解析优先级；找不到设备时的行为。
+- 建单幂等：同一 `(plan_id, scheduled_at)` 连续扫描两次，`medication_orders` 只增一条；重复启动补漏，漏服工单不重复。
+- 启动补漏：构造"已过期且无订单 / 已过期且 pending"两组数据，启动函数执行后均为 `missed` 且各只有一张工单。
 - 外呼编排测试：用 fake session/manager 与 fake track，断言 addTrack 在 createOffer 之前、超时走 retry、降级标记正确；不要在单测里启动真实 aiortc/网络。
-- 调度器测试：测试环境不启动真实 scheduler；job 函数可单独 await 调用。
+- 调度器测试：测试环境不启动真实 scheduler；job 函数可单独 await 调用；`apscheduler` 未安装时 lifespan 不抛异常。
 
 【涉及文件】
 - 新增：`app/services/medication_scheduler.py`、`app/services/outbound.py`、`scripts/trigger_medication_call.py`、`tests/test_outbound_scheduler.py`、`tests/test_outbound_call.py`
-- 修改：`app/core/config.py`、`app/core/lifespan.py`、`app/realtime/session.py`、`app/api/routes/voice.py`、`app/services/voice.py`（仅加按设备取会话/发事件的方法）、`app/static/js/voice.js`、`.env.example`
+- 修改：`app/core/config.py`、`app/core/lifespan.py`、`app/realtime/session.py`、`app/api/routes/voice.py`、`app/services/voice.py`（仅加按设备取会话/发事件的方法）、`app/static/js/voice.js`、`pyproject.toml`（确认 `apscheduler` 在 `infra` 可选组）、`.env.example`
+- 只调用不改：`app/services/medication_order.py`（`ensure_order`/`mark_*`）、`app/services/workorder.py`（`create_missed_medication_work_order`）、`app/graphs/medication.py`
 - 不改：`app/router/**`、`app/agent/**`、`alembic/**`
 
 【必须遵守的约束】
 - aiortc 的所有任务必须绑定 uvicorn 运行 loop：禁止 `new_event_loop`、禁止在独立线程跑 PC；PC 在此处的创建位置是"调度 job（同 loop）"，不要挪到线程池。
 - `addTrack` 必须在 `createOffer` 之前；不要依赖 `on("track")` 的时序做关键动作。
+- **先 `ensure_order` 并 commit，再外呼**；不得先外呼后补单，也不得绕过唯一键自行判重。
+- 漏服建单只调用段 1 的 `create_missed_medication_work_order`；`commit()` 之后才 `publish_workorder_event`。
 - 原始音频（PCM/Opus/采样）不落盘、不入日志；只记时长、延迟、结果元数据。
+- 调度器默认单实例；多实例只保证"不重复建单"，必须写明限制，不得暗示已支持多实例。
+- `apscheduler` 未安装时必须可启动并有明确降级日志。
 - 不实现夜间健康外呼、健康分级、医院对接、HITL 看板（Day8）。
 - 不新增数据库表/迁移；不改已执行迁移；`elder_id` 只来自服务端上下文。
 - 前端不引入框架；保持现有 `voice.js` 风格；不破坏已有 TTS/口型/音量逻辑。
@@ -514,24 +775,28 @@
 【验收标准】
 1. `pytest tests/test_outbound_scheduler.py tests/test_outbound_call.py -q` 全过；`ruff check .` 通过。
 2. 手工：启动后端与平板页 → `scripts/trigger_medication_call.py --plan-id <uuid>` → 平板在 8 秒内出声说出提醒；日志出现 `medication_call_started` 与结果字段（rtc 或 degraded）。
-3. 手工：提醒后不回应 → 30 秒后 attempt 增加；连续 3 次后 `workorders` 出现漏服工单，且只出现一条。
+3. 手工：提醒后不回应 → 30 秒后 attempt 增加；连续 3 次后 `workorders` 出现漏服工单，且只出现一条；`medication_orders.status=missed`。
 4. 手工：关闭平板 WS 再触发 → 日志明确 `degraded=rtc_unavailable`，且没有未捕获异常。
-5. 手工：外呼等待中重启后端 → 再次扫描时从当前 attempt 继续，而不是重新 attempt=1。
-6. 代码检查：全局搜索确认没有 `new_event_loop` / `threading.Thread` 跑 aiortc。
+5. 手工：外呼等待中重启后端 → 启动补漏把过期未确认时段落 `missed` 并各建一张工单；再次扫描从当前 attempt 继续，而不是重新 attempt=1。
+6. 手工：卸载/不安装 `apscheduler` 启动后端 → 应用正常启动，日志有 `medication_scheduler_unavailable`，其他功能不受影响。
+7. 代码检查：全局搜索确认没有 `new_event_loop` / `threading.Thread` 跑 aiortc。
 
 【完成后请说明】
-- 调度器启动/关闭位置与 job 参数；
+- 调度器启动/关闭位置、job 参数与"未安装时"的降级；
+- `ensure_order` 的调用位置、唯一键与三层幂等；
+- 启动补漏的判定、幂等与日志字段；
 - 设备解析规则与无设备/离线的行为；
 - 信令消息格式、前端改动点、降级触发条件；
-- 超时判定方式（为何不占住 job）；
+- 超时判定方式（为何不占住 job）与"DB 优先"处理；
 - 手工验收的真实输出；
-- 已知限制（无 TURN、自动播放、单实例约束）与降级表现。
+- 已知限制（单实例、无 TURN、自动播放）与降级表现。
 
 【本段不做什么】
 - 不改主控 Agent、不改三级路由判定逻辑、不改用药计划 API/权限（只读计划）。
 - 不重协商日常收音 PC、不改造现有 ASR/TTS 主链路；只新增一条独立外呼 PC 与降级分支。
 - 不新增数据表/迁移、不改已存在迁移；不实现夜间健康外呼、分级阈值、医院对接、HITL 看板。
 - 不做前端框架改造，只给 `voice.js` 加服务端 offer/answer 与降级播放处理。
+- 不重写段 1 的双表服务与建单函数、段 3 的图。
 - 不做记忆、媒体、评测（段 5–7）。
 ```
 
@@ -906,18 +1171,45 @@ Day6 已有路由层评测：`eval/fixtures/day6_intents.jsonl`、`scripts/eval_
 
 ## 附：段间冲突检查表（执行者可自查）
 
-| 检查项 | 段 1 | 段 2 | 段 3 | 段 4 | 段 5 | 段 6 | 段 7 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 新增 Alembic 迁移 | 仅 `0008 medication_order_flow` | 禁止 | 禁止 | 禁止 | 禁止 | 仅 `0009 media_history` | 禁止 |
-| 改 `app/models/**` | 仅 `medication.py`、`workorder.py` | 禁止 | 禁止 | 禁止 | 禁止 | 仅新增 `media_history.py` 并注册 | 禁止 |
-| 改用药计划 API / 权限 | 允许（唯一写入方） | 只读消费 | 只读服务 | 只读计划 | 禁止 | 禁止 | 禁止 |
-| 改 `app/services/workorder.py` | 长期工单建单 + 关闭保护 | 禁止 | 漏服一次性建单 | 禁止 | 禁止 | 禁止 | 禁止 |
-| 改 `app/router/**` | 禁止 | 禁止 | 仅加 `MED-01` 前置分支 | 禁止 | 禁止 | 仅 R01/R04 加 `tool`，`executor` 让位 | 禁止 |
-| 改 `app/realtime/**` | 禁止 | 禁止 | 禁止 | 允许 | 禁止 | 禁止 | 禁止 |
-| 改 `app/static/js/voice.js` | 禁止 | 禁止 | 禁止 | 加 `rtc_call_offer` 处理 | 禁止 | 加媒体播放 | 禁止 |
-| 改 `doctor.html/family.html/workorders.js` | 禁止 | 允许 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
-| 改 `app/core/lifespan.py` | 禁止 | 禁止 | 禁止 | 允许（调度器） | 禁止 | 禁止 | 禁止 |
-| 使用 LangGraph `interrupt` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
-| 新增数据表 | 禁止（只加列） | 禁止 | 禁止 | 禁止 | 禁止 | 仅 `media_history` | 禁止 |
-| 通知/看板/图表/家属日报 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
-| `git commit/push/tag` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| 检查项 | 段 1 | 段 1.5 | 段 2 | 段 3 | 段 4 | 段 5 | 段 6 | 段 7 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 新增 Alembic 迁移 | 仅 `0008 medication_order_flow` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 仅 `0009 media_history` | 禁止 |
+| 改 `app/models/**` | 仅 `medication.py`、`workorder.py`，新增 `medication_order.py` | 禁止（`WorkorderRead` 在段 1 建） | 禁止 | 禁止 | 禁止 | 禁止 | 仅新增 `media_history.py` 并注册 | 禁止 |
+| 改用药计划 API / 权限 | 允许（唯一写入方） | 禁止 | 只读消费 | 只读服务 | 只读计划 | 禁止 | 禁止 | 禁止 |
+| 改 `app/services/workorder.py` | 长期工单建单 + 漏服建单 + 系统关闭 + 关闭保护 | 按账号已读/计数/列表 `is_read` | 禁止 | 只调用漏服建单 | 只调用漏服建单 | 禁止 | 禁止 | 禁止 |
+| 改 `app/services/medication_order.py` | 新建（唯一写入方） | 禁止 | 禁止 | 只调用 `ensure_order`/`mark_*` | 只调用 | 禁止 | 禁止 | 禁止 |
+| 改 `app/router/**` | 禁止 | 禁止 | 禁止 | 仅加 `MED-01` 前置分支 | 禁止 | 禁止 | 仅 R01/R04 加 `tool`，`executor` 让位 | 禁止 |
+| 改 `app/realtime/**` | 禁止 | 禁止 | 禁止 | 禁止 | 允许 | 禁止 | 禁止 | 禁止 |
+| 改 `app/static/js/voice.js` | 禁止 | 禁止 | 禁止 | 禁止 | 加 `rtc_call_offer` 处理 | 禁止 | 加媒体播放 | 禁止 |
+| 改四端 HTML / `workorders.js` | 禁止 | 允许 | 允许 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| 改 `app/core/lifespan.py` | 禁止 | 禁止 | 禁止 | 禁止 | 允许（调度器 + 启动补漏） | 禁止 | 禁止 | 禁止 |
+| 使用 LangGraph `interrupt` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| 新增数据表 | 三张：`medication_orders`/`medication_events`/`workorder_reads` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 仅 `media_history` | 禁止 |
+| 改已有表结构 | `medication_plans`/`workorders`/事件 CHECK | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| 工单 WS 四端 | 禁止（段 1 不改 WS） | 允许（唯一改造方） | 只消费 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| 通知/角标/看板/家属日报 | 禁止 | 允许 WS/轮询；禁止 counts 给 admin/family、禁止角标 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `git commit/push/tag` | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+
+## 附：可行性自检清单（执行前/交付前各过一遍）
+
+**执行前（判断这段提示词能不能直接照做）**
+
+1. 目标文件是否存在：`app/services/workorder_events.py` 的 `_resolve_recipients` / `_dispatch`、`app/api/routes/workorders.py` 的 WS 鉴权、`app/static/js/workorders.js` 的 `isStaff/connectWs`、`app/models/medication.py` 是否与文中描述一致。不一致时**先报告差异再动手**，不要按文档硬改。
+2. 约束名是否存在：`ck_workorder_events_type`、`ck_workorder_events_actor_role`、`ck_workorders_source`、`ck_workorder_dispositions_role` 是否能在 `0007` 中查到；查不到就停下确认，不要直接 drop。
+3. 最新迁移编号是否仍为 `0007`；若已前进，重排本段的 `0008`，且不要回改旧迁移。
+4. 角色枚举是否仍为 `doctor/nurse/admin/family`；WS 路径是否仍为 `/api/v1/staff/ws`（路径名不改，只改鉴权）。
+5. `apscheduler` 是否仍在 `optional-dependencies.infra`；若被移入主依赖，段 4 的"未安装降级"要改成"版本不兼容降级"。
+6. 本段新增的接口是否已被前一段实现；同名但路径不同时以代码为准，并把差异写进交付说明。
+7. 计划中的 `medication_orders`/`medication_events` 是否已经存在（避免重复建表）；存在则核对字段与唯一键后再决定是否加迁移。
+
+**交付前（判断这段改造是否真的可用）**
+
+1. 权限：未绑定医生返回 404、非医生写操作返回 403；不依赖前端隐藏按钮。
+2. 事务：所有 `publish_workorder_event` 都在 `commit()` 之后；全局搜索确认没有 flush 后推送。
+3. 唯一性：`(plan_id, scheduled_at)`、`dedupe_key` 两个唯一键都在数据库层生效，不只靠应用判重。
+4. 家属字段白名单：响应体全文不含 `internal_note`、`skip_reason`、`workorder_id`、`actor_account_id`、`device_id`、`payload` 原文。
+5. 已读语义：已读按账号、处理按角色；`handled` 仍是关闭门禁。
+6. 实时：暂停/断网后 30 秒内进入轮询；恢复后停止轮询；四端都能收到刷新（管理员与家属不再是"打开页面拉一次"）。
+7. 降级：`apscheduler`/`langgraph`/`aiortc`/TTS/Embedding 任一不可用时，应用能启动且行为可见（日志 + 用户可感知话术），不静默失败。
+8. 数据安全：日志与测试无真实长者信息、无对话原文、无音频、无 `internal_note` 原文。
+9. 未越界：没有站外通知、角标、看板、图表、审批中心；没有重写 Agent；没有回改旧迁移；没有 `git commit/push/tag`。

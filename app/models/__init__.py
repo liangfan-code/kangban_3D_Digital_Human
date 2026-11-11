@@ -19,10 +19,11 @@ from app.models.health_profile import (
 )
 from app.models.media import MediaLibrary
 from app.models.medication import MedicationPlan
+from app.models.medication_order import MedicationEvent, MedicationOrder
 from app.models.memory import MemoryChunk
 from app.models.persona import Persona
 from app.models.voiceprint import Voiceprint
-from app.models.workorder import Workorder, WorkorderDisposition, WorkorderEvent
+from app.models.workorder import Workorder, WorkorderDisposition, WorkorderEvent, WorkorderRead
 
 __all__ = [
     "Base",
@@ -42,6 +43,8 @@ __all__ = [
     "HealthRecord",
     "HealthSummary",
     "MediaLibrary",
+    "MedicationEvent",
+    "MedicationOrder",
     "MedicationPlan",
     "MemoryChunk",
     "Persona",
@@ -50,4 +53,5 @@ __all__ = [
     "Workorder",
     "WorkorderDisposition",
     "WorkorderEvent",
+    "WorkorderRead",
 ]

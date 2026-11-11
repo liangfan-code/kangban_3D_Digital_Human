@@ -68,6 +68,46 @@ class MedicationPlanStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class MedicationOrderStatus(StrEnum):
+    """服药任务单当前态：每计划每时段一条。"""
+
+    PENDING = "pending"
+    CALLING = "calling"
+    CONFIRMED = "confirmed"
+    MISSED = "missed"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+
+
+class MedicationEventType(StrEnum):
+    """服药事实事件：只 INSERT，不 UPDATE/DELETE。"""
+
+    CREATED = "created"
+    REMINDED = "reminded"
+    CONFIRMED = "confirmed"
+    DENIED = "denied"
+    TIMEOUT = "timeout"
+    MISSED = "missed"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+
+
+class MedicationEventSource(StrEnum):
+    SCHEDULER = "scheduler"
+    VOICE = "voice"
+    TEXT = "text"
+    STAFF = "staff"
+    FAMILY = "family"
+    SYSTEM = "system"
+
+
+class WorkorderOrderKind(StrEnum):
+    """工单派单类型：一次性 / 长期（随用药计划关闭）。"""
+
+    ONE_OFF = "one_off"
+    STANDING = "standing"
+
+
 class MediaType(StrEnum):
     OPERA = "opera"
     MOVIE = "movie"

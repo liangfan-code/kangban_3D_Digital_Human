@@ -113,10 +113,17 @@ def _item_from(
     return WorkorderListItem(
         id=workorder.workorder_id,
         elder_id=workorder.elder_id,
+        type=workorder.type,
+        title=workorder.title,
         category=workorder.sensitive_category,
         status=workorder.status,
         priority=workorder.priority,
         occurrence_count=workorder.occurrence_count,
+        order_kind=workorder.order_kind,
+        medication_plan_id=workorder.medication_plan_id,
+        medication_order_id=workorder.medication_order_id,
+        effective_from=workorder.effective_from,
+        effective_until=workorder.effective_until,
         created_at=workorder.created_at,
         updated_at=workorder.updated_at,
         dispositions=[WorkorderDispositionOut.model_validate(row) for row in dispositions],
@@ -130,7 +137,6 @@ def _detail_from(
 ) -> WorkorderDetail:
     return WorkorderDetail(
         **_item_from(workorder, dispositions, role).model_dump(),
-        title=workorder.title,
         description=workorder.description,
         context_snapshot=workorder.context_snapshot,
         resolved_at=workorder.resolved_at,
@@ -144,7 +150,6 @@ def _family_detail_from(
 ) -> FamilyWorkorderDetail:
     return FamilyWorkorderDetail(
         **_item_from(workorder, dispositions, role).model_dump(),
-        title=workorder.title,
         description=workorder.description,
         resolved_at=workorder.resolved_at,
         closed_by=workorder.closed_by,

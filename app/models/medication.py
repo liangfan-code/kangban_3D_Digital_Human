@@ -1,11 +1,12 @@
 ﻿"""medication_plans ORM：用药计划，必属一个 elder。"""
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     String,
@@ -36,6 +37,7 @@ class MedicationPlan(TimestampMixin, Base):
             name="ck_medication_plans_date_range",
         ),
         Index("ix_medication_plans_elder_status", "elder_id", "status"),
+        Index("ix_medication_plans_workorder", "workorder_id"),
     )
 
     plan_id: Mapped[uuid.UUID] = pk_uuid()
@@ -52,4 +54,22 @@ class MedicationPlan(TimestampMixin, Base):
         default=MedicationPlanStatus.PLANNED,
         server_default=MedicationPlanStatus.PLANNED,
     )
+    created_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.account_id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.account_id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confirmed_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.account_id", ondelete="SET NULL"), nullable=True
+    )
+    workorder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workorders.workorder_id", ondelete="SET NULL"), nullable=True
+    )
+    # 医生内部备注：doctor/nurse/admin 可见，家属接口永不返回
+    internal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 

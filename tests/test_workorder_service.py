@@ -382,6 +382,24 @@ async def test_family_requires_valid_link(db_session, seed):
     assert rows[0].workorder_id == workorder.workorder_id
 
 
+async def test_list_item_exposes_type_and_order_kind(
+    api, db_session, seed, auth_headers_factory
+):
+    """段 1 契约扩展：列表返回 type/title/order_kind，已读字段在 1.5 前保持空。"""
+    await _bind_doctor_and_nurse(db_session, seed)
+    await _create(db_session, seed)
+    headers = await auth_headers_factory("doctor")
+
+    resp = await api.get("/api/v1/staff/workorders", headers=headers)
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["type"] == "sensitive"
+    assert item["title"]
+    assert item["order_kind"] == "one_off"
+    assert item["is_read"] is None
+    assert item["read_at"] is None
+
+
 async def test_count_open_by_role(db_session, seed):
     await _bind_doctor_and_nurse(db_session, seed)
     doctor = seed["accounts"]["doctor"]
