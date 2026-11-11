@@ -77,6 +77,7 @@ class JsonFormatter(logging.Formatter):
             "failure_threshold",
             "open_seconds",
             "asr_confidence",
+            "asr_confidence_source",
             "asr_low_conf",
             "mode",
             "pcm_bytes",

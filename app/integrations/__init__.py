@@ -25,7 +25,10 @@ class ASRResult:
     text: str
     is_final: bool
     mode: str = ""  # online（2pass 部分结果）/ 2pass-offline（终句）
-    confidence: float = 0.0
+    # None = 上游未提供置信度；禁止用 0.0 冒充，否则日志与低置信策略会被误导
+    confidence: float | None = None
+    # provider：上游确实返回了置信度字段；unavailable：供应商/镜像不提供
+    confidence_source: str = "unavailable"
 
 
 class ASRProvider(ABC):

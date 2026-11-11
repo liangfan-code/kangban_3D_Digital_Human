@@ -44,6 +44,26 @@ _PROTOCOL_CONFIG: dict[str, Any] = {
 }
 
 
+def _extract_confidence(data: dict[str, Any]) -> tuple[float | None, str]:
+    """从 FunASR 结果中提取置信度。
+
+    本镜像（funasr-runtime-sdk-online-cpu-0.1.13）的 2pass 结果不携带置信度；
+    标准实现或其他镜像可能用 confidence/score/ctc_confidence/avg_confidence。
+    取不到时返回 (None, "unavailable")，绝不回落 0.0，避免被误读为「识别质量为 0」。
+    """
+    for key in ("confidence", "score", "ctc_confidence", "avg_confidence"):
+        raw = data.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= value <= 1.0:
+            return round(value, 4), "provider"
+    return None, "unavailable"
+
+
 class FunASRWSProvider(ASRProvider):
     """FunASR WSS 流式识别（一次会话 = 一个 utterance）。"""
 
@@ -98,17 +118,22 @@ class FunASRWSProvider(ASRProvider):
                 # 结果不携带 is_final 字段（POC-02 实测），mode 含 offline 即终句；
                 # 标准实现若带 is_final 亦尊重之。
                 is_final = bool(data.get("is_final", False)) or "offline" in mode
+                confidence, confidence_source = _extract_confidence(data)
                 result = ASRResult(
                     text=data.get("text", ""),
                     is_final=is_final,
                     mode=mode,
-                    confidence=float(data.get("confidence", 0.0)),
+                    confidence=confidence,
+                    confidence_source=confidence_source,
                 )
                 await self._results.put(result)
                 if is_final and "offline" in result.mode:
                     break  # 2pass-offline 终句即会话终点
         except Exception as exc:  # noqa: BLE001 —— 接收循环异常统一收敛为会话关闭
-            logger.error("funasr_receive_error", extra={"event": "funasr_receive_error", "error": str(exc)})
+            logger.error(
+                "funasr_receive_error",
+                extra={"event": "funasr_receive_error", "error": str(exc)},
+            )
         finally:
             self._closed = True
 

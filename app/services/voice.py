@@ -13,8 +13,10 @@
 - 临时 Token：仅内存（进程内字典），不落库，默认 300s（voiceprint_token_ttl）；
 - 降级（验收项 5）：FunASR 不可达/声纹未配置 → WS 事件可见降级 + 文字输入通道
   （HTTP 已有），绝不静默；
-- 可观测（验收项 10）：终句写 asr_confidence/asr_e2e_ms/tts_first_byte_ms，
-  低置信（<0.6）打标 asr_low_conf；原始音频不落盘不入日志（TDD §4 禁区）。
+- 可观测（验收项 10）：终句写 asr_confidence/asr_confidence_source/asr_e2e_ms/
+  tts_first_byte_ms；仅当上游提供置信度时才写 asr_low_conf（<0.6 打标），
+  供应商不提供时 confidence=None、source=unavailable，不以 0.0 冒充；
+  原始音频不落盘不入日志（TDD §4 禁区）。
 - LLM 回复（Day4 用户决策）：System Two（Qwen 兼容 API）流式分句回复，带最近 5 轮
   历史（conversation_messages）与人设/动作协议 system prompt；未配置或调用失败
   可见降级回模板回复 + 关键词规则动作，通话绝不中断。
@@ -1331,7 +1333,8 @@ class VoiceSession:
             await asr.finish()
 
             final_text: str | None = None
-            final_confidence = 0.0
+            final_confidence: float | None = None
+            final_confidence_source = "unavailable"
             async for result in asr.results():
                 if result.text:
                     await self.send_event(
@@ -1340,12 +1343,15 @@ class VoiceSession:
                             "text": result.text,
                             "mode": result.mode,
                             "is_final": result.is_final,
-                            "confidence": round(result.confidence, 4),
+                            "confidence": (
+                                None if result.confidence is None else round(result.confidence, 4)
+                            ),
                         }
                     )
                 if result.is_final and "offline" in result.mode:
                     final_text = result.text
                     final_confidence = result.confidence
+                    final_confidence_source = result.confidence_source
                     asr_e2e_ms = (time.perf_counter() - t0) * 1000
                     trace.mark("asr_final")
                     logger.info(
@@ -1353,10 +1359,17 @@ class VoiceSession:
                         extra={
                             "event": "asr_final",
                             "elder_id": str(self.verified_elder_id),
-                            "asr_confidence": round(final_confidence, 4),
+                            "asr_confidence": (
+                                None if final_confidence is None else round(final_confidence, 4)
+                            ),
+                            "asr_confidence_source": final_confidence_source,
                             "asr_e2e_ms": round(asr_e2e_ms, 1),
                             "mode": result.mode,
-                            "asr_low_conf": final_confidence < LOW_CONFIDENCE,
+                            "asr_low_conf": (
+                                None
+                                if final_confidence is None
+                                else final_confidence < LOW_CONFIDENCE
+                            ),
                         },
                     )
                     break
