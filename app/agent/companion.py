@@ -83,6 +83,8 @@ class AgentResult:
     client_events: list[dict[str, Any]] = field(default_factory=list)
     steps: int = 0
     degraded: str | None = None
+    # 来自 MCP Server 的工具调用次数；本地确定性工具不计入
+    mcp_calls: int = 0
 
 
 class AgentUnavailable(RuntimeError):
@@ -144,6 +146,7 @@ async def respond(
 
     tool_names: list[str] = []
     client_events: list[dict[str, Any]] = []
+    mcp_calls = 0
 
     for step in range(1, AGENT_MAX_STEPS + 1):
         try:
@@ -156,7 +159,7 @@ async def respond(
             content = str(message.get("content") or "").strip()
             if not content:
                 raise AgentUnavailable("Agent 空回复")
-            return AgentResult(content, tool_names, client_events, step)
+            return AgentResult(content, tool_names, client_events, step, mcp_calls=mcp_calls)
 
         messages.append(
             {
@@ -187,9 +190,12 @@ async def respond(
                     client_events,
                     step,
                     degraded=f"tool_loop_guard:{exc.reason}",
+                    mcp_calls=mcp_calls,
                 )
             result = await tools.call(name, _parse_args(function.get("arguments")), ctx)
             tool_names.append(name)
+            if result.mcp_server:
+                mcp_calls += 1
             client_events.extend(result.client_events)
             messages.append(
                 {

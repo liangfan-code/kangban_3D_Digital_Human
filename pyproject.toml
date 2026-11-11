@@ -21,6 +21,7 @@ dependencies = [
     "numpy>=2.5.4",
     "edge-tts>=7.3.1",
     "mcp>=1.9,<3",
+    "httpx>=0.28",
     "laya>=0.4.30",
 ]
 
@@ -34,7 +35,6 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
-    "httpx>=0.28",
     "ruff>=0.8",
 ]
 

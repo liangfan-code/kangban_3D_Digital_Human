@@ -1,0 +1,22 @@
+# Checklist
+
+- [ ] `config/mcp_servers.json` 可声明多个 Server；新增/更换/停用只改配置即可生效，无需改业务代码
+- [ ] 配置文件缺失、JSON 损坏、单个 Server 启动失败时应用照常启动，且有 `mcp_config_invalid` / `mcp_discovery_failed` / `mcp_startup_degraded` 可见日志
+- [ ] 多 Server 并发发现，单 Server 超时不阻塞其他 Server；`enabled:false` 不发现、不注册
+- [ ] 工具暴露名符合规则：别名优先（`weather_get` 保持可用）→ `tool_prefix` → `<server_id>__<tool>`；非法字符清洗、64 字符截断、重名跳过
+- [ ] `allow_tools` / `deny_tools` 生效，`deny` 优先；外部 Server 的写操作不会默认暴露给模型
+- [ ] stdio 子进程环境为最小白名单；`LLM_API_KEY`、`JWT_SECRET_KEY`、`DATABASE_URL` 等不会被子进程继承
+- [ ] HTTP `headers` 支持 `env:VAR` 解析；配置文件与日志中无明文密钥
+- [ ] MCP 调用使用短生命周期会话，无 `new_event_loop`、无跨事件循环复用，符合 AGENTS 实时模块规则
+- [ ] MCP 超时/异常/`isError` 统一降级为 `ToolResult(ok=False)`，语音链路不抛异常，话术可朗读
+- [ ] `ToolResult.mcp_server` 已记录来源；`voice.py` 的 `mcp_calls` 覆盖所有 MCP 工具而非只统计 `weather_get`
+- [ ] 未配置天气 MCP 时仍注册兜底 `weather_get`，规则层 `R07` 不出现 `unknown_tool`
+- [ ] 天气默认 Provider 为 Open-Meteo，无需 API Key 即返回真实温度与天气描述，内容不含「示例数据」
+- [ ] 城市查不到时给出明确提示，不猜测坐标；「本地」且未配置默认城市时反问城市
+- [ ] 天气请求有超时与 TTL 缓存；失败时不编造天气数据，返回明确降级话术
+- [ ] `fixture` Provider 仅在显式配置时启用，且保留【示例数据】标注
+- [ ] `python -m app.agent.mcp_client` 可列出 Server 状态/工具/别名/失败原因，退出码 0
+- [ ] `python -m pytest` 全绿，测试不依赖外网与数据库；真实网络用例由 `MCP_WEATHER_LIVE_TEST=1` 显式开启
+- [ ] `ruff check .` 通过
+- [ ] `.env.example` 与 `docs/Day6-三级路由验收.md` 已同步 MCP 配置方式、数据源与降级矩阵
+- [ ] 人工复核 `app/agent/**` 与 `mcp-servers/**` diff（AGENTS 高风险文件清单）

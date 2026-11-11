@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agent.mcp_client import McpWeatherClient
+from app.agent.mcp_client import McpHost, McpToolInfo, get_mcp_host
 from app.router.executor import time_reply
 from app.services.hitl import hitl_queue
 
@@ -33,6 +33,8 @@ class ToolResult:
     content: str
     client_events: list[dict[str, Any]] = field(default_factory=list)
     degraded: str | None = None
+    # MCP 来源 Server；本地确定性工具为 None。放末尾保持原位置参数兼容。
+    mcp_server: str | None = None
 
 
 ToolHandler = Callable[[dict[str, Any], ToolContext], Awaitable[ToolResult]]
@@ -119,19 +121,66 @@ def _notify_parameters() -> dict[str, Any]:
     }
 
 
-def build_default_registry(
-    weather_client: McpWeatherClient | None = None,
-) -> ToolRegistry:
-    """构建默认 Tool 集合；weather 通过 MCP，其余为 Day6 的确定性实现。"""
-    client = weather_client or McpWeatherClient()
+def _mcp_parameters(schema: Any) -> dict[str, Any]:
+    """MCP 入参 Schema 兜底：非 dict 或为空时给空对象 Schema。"""
+    if isinstance(schema, dict) and schema:
+        return schema
+    return _empty_parameters()
+
+
+def _mcp_handler(host: McpHost, info: McpToolInfo) -> ToolHandler:
+    """把一次 MCP 调用映射成 ``ToolResult``，失败带 Server 维度降级标记。"""
+
+    async def handler(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
+        result = await host.call(info.exposed_name, args)
+        server_id = result.server_id or info.server_id
+        if result.ok:
+            return ToolResult(ok=True, content=result.content, mcp_server=server_id)
+        return ToolResult(
+            ok=False,
+            content=result.content,
+            degraded=f"mcp_unavailable:{server_id}",
+            mcp_server=server_id,
+        )
+
+    return handler
+
+
+def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
+    """构建默认 Tool 集合：本地确定性工具 + MCP 动态发现工具。"""
+    host = mcp_host or get_mcp_host()
     registry = ToolRegistry()
 
-    async def weather_get(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
-        result = await client.call_weather(str(args.get("city") or "本地"))
-        return ToolResult(
-            ok=result.ok,
-            content=result.content,
-            degraded=None if result.ok else "mcp_unavailable",
+    # MCP 动态工具：未启动或发现失败时快照为空，此时不注册任何远端工具
+    for info in host.tools_snapshot():
+        registry.register(
+            ToolSpec(
+                info.exposed_name,
+                info.description or f"{info.server_id} 提供的工具",
+                _mcp_parameters(info.input_schema),
+                _mcp_handler(host, info),
+            )
+        )
+
+    # 天气兜底：规则层 R07 与分类器固定调用 weather_get，不能退化成 unknown_tool
+    if "weather_get" not in registry.names():
+
+        async def weather_unavailable(
+            args: dict[str, Any], ctx: ToolContext  # noqa: ARG001
+        ) -> ToolResult:
+            return ToolResult(
+                False,
+                "天气服务暂时用不了，我先帮您记着，等会儿再试试。",
+                degraded="mcp_unavailable:weather",
+            )
+
+        registry.register(
+            ToolSpec(
+                "weather_get",
+                "查询天气（MCP 天气服务当前不可用）",
+                _weather_parameters(),
+                weather_unavailable,
+            )
         )
 
     async def time_get(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
@@ -182,9 +231,6 @@ def build_default_registry(
             client_events=[{"type": "hitl", "kind": "notify_family", "status": "pending"}],
         )
 
-    registry.register(
-        ToolSpec("weather_get", "查询本地天气（本地示例数据）", _weather_parameters(), weather_get)
-    )
     registry.register(
         ToolSpec("time_get", "查询当前日期与时间", _empty_parameters(), time_get)
     )

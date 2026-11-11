@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     breaker_window_seconds: int = 60
     breaker_open_seconds: int = 30
 
+    # ---- Day6.4 MCP 多 Server（配置驱动，缺省从 config/mcp_servers.json 读取）----
+    mcp_enabled: bool = True
+    mcp_config_path: str | None = None
+    mcp_default_call_timeout_seconds: float = 8.0
+
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None
     webrtc_turn_servers: str | None = None

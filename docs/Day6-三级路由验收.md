@@ -1,7 +1,7 @@
 # Day6 三级路由验收
 
 > 范围：大纲课时 6.1–6.4。判定链路「安全一票否决 → 规则层 → 分类器层（System One）→ 主控 Agent（ReAct + Tool + MCP）」全部为纯函数或可插拔实现，语音/文字双通道共用。
-> 约束：不加载模型权重、不调用外部天气服务、不新增数据库迁移；Laya 与 MCP 均走「不可用即可见降级」。
+> 约束：不加载模型权重、默认测试不访问外部网络（真实 Open-Meteo 需显式开启 `MCP_WEATHER_LIVE_TEST=1`）、不新增数据库迁移；Laya 与 MCP 均走「不可用即可见降级」。
 
 ## 1. 代码地图
 
@@ -11,7 +11,7 @@
 | 规则（10 条，零模型） | `route_text` 第二步 | `app/router/rules.py` | `tests/test_router_rules.py` |
 | 分类器（五组问题） | `route_text` 第三步 | `app/router/classifier.py`、`app/system_one/questions.py`、`app/integrations/laya.py` | `tests/test_router_classifier.py` |
 | 主控 Agent | 多意图 / 闲聊 / 健康采集 | `app/agent/companion.py`、`app/agent/tools.py` | `tests/test_companion_agent.py`、`tests/test_agent_tools.py` |
-| MCP | 天气 Tool | `mcp-servers/weather/server.py`、`app/agent/mcp_client.py` | `tests/test_agent_mcp.py` |
+| MCP | 天气 Tool | `app/agent/mcp_client.py`（McpHost）、`config/mcp_servers.json`、`mcp-servers/weather/{server,providers}.py` | `tests/test_mcp_host.py`、`tests/test_agent_mcp.py` |
 | HITL | 敏感事件 / 通知家属 | `app/services/hitl.py`、`app/api/routes/hitl.py` | `tests/test_hitl_api.py` |
 | 评测 | 离线基线 | `eval/fixtures/day6_intents.jsonl`、`scripts/eval_day6.py` | `tests/test_eval_day6.py` |
 
@@ -26,7 +26,7 @@
 | 5 | 低置信澄清 | 那个药还够吗 | `classifier`，`needs_clarification=true`，回复澄清话术 | `pytest tests/test_router_classifier.py -k low` |
 | 6 | 闲聊升级 | 你陪我聊聊天吧 | `agent`，`escalated_to_agent=true`，走流式 LLM | `pytest tests/test_voice_text.py` |
 | 7 | 多意图组合 | 吃完药放戏再告诉我儿子 | 主控 Agent 按序调 `medication_query` / `media_play` / `notify_family`，不被低置信反问截断 | `pytest tests/test_voice_text.py -k multi_intent`、`tests/test_companion_agent.py` |
-| 8 | MCP 天气 | 上海天气 | 真实 stdio 子进程返回本地 fixture，标注【示例数据】 | `pytest tests/test_agent_mcp.py` |
+| 8 | MCP 天气 | 上海天气 | 真实 stdio 子进程返回 Open-Meteo 免费数据（无需 Key）；测试用 fixture Provider，标注【示例数据】 | `pytest tests/test_agent_mcp.py`（真实网络需 `MCP_WEATHER_LIVE_TEST=1`） |
 | 9 | HITL 管理 | `GET /api/v1/admin/hitl/pending` | 仅 admin；可列出并 resolve | `pytest tests/test_hitl_api.py` |
 | 10 | 评测基线 | 50 条标注样例 | 分层/意图/敏感召回/延迟/成本可复算 | `python scripts/eval_day6.py` |
 
@@ -46,7 +46,9 @@ route_layer=agent   escalated_to_agent=true  llm_called=true  agent_steps=2  too
 | Laya 未安装 / 未配置权重 / 加载失败 | `LayaClassifier.available` | 回落 `LocalIntentClassifier` | 日志 `system_one_fallback`；评测报告标注 `classifier=local` |
 | LLM 未配置 / 超时 / 5xx | `LlmUnavailable` | 模板回复，通话不中断 | 文字接口 `degraded=true`；语音事件流可见 |
 | Agent 空回复 / 步数超 4 步 / 工具重试保护 | `AgentUnavailable` | `agent_fallback` 后回落流式 LLM | 结构化日志 `degrade=agent_fallback` |
-| MCP 子进程启动失败 / 5s 超时 | `McpCallResult.ok=false` | 返回可朗读的降级话术 | `trace.degrade("tool_unavailable")`，回复不编造天气 |
+| MCP 配置缺失/损坏 | `load_mcp_servers` 返回空列表 | 不启动任何外部 Server，其余链路照常 | 日志 `mcp_config_missing` / `mcp_config_invalid`；`server_status` 为空或 `available=false` |
+| 单 Server 发现失败（脚本缺失/启动异常/发现超时） | 启动期 `initialize + list_tools` 失败 | 该 Server `available=false`，其余 Server 与本地工具照常可用 | 日志 `mcp_discovery_failed`；`server_status.error` 非空；`tools_snapshot` 不含其工具 |
+| 天气网络失败 / 超时 | `McpCallResult.ok=false` | 返回可朗读的降级话术，不编造天气 | `mcp_unavailable:<server_id>`、`trace.degrade("mcp_unavailable:weather")`，回复不编造天气 |
 | 用药工具未接入 | 工具 handler 明确返回未接入 | 引导查看药盒/联系家属，不编造药名剂量 | `ToolResult.ok=false` + 降级标记 |
 | 通知家属 | 禁止直接外呼 | 写入 HITL 队列，Agent 只收到「已转人工确认」 | `hitl_enqueued=true`，admin 队列可见 |
 | ASR / 声纹不可用（Day3 既有） | Provider 异常 | WS error 事件 + 文字通道 | 原有降级链不变 |
@@ -57,17 +59,18 @@ route_layer=agent   escalated_to_agent=true  llm_called=true  agent_steps=2  too
 
 | 项 | 内容 |
 | --- | --- |
-| Tool 名 | `get_weather` |
+| Tool 名 | `get_weather`（对外暴露名 `weather_get`，由配置 `tool_aliases` 指定） |
 | 入参 | `city: string`，默认「本地」 |
-| 出参 | 中文短句，固定前缀 `【示例数据】` |
-| 数据源 | 进程内 fixture（北京/上海/广州/杭州/默认），**不访问网络** |
+| 出参 | 中文短句，含数据来源「Open-Meteo」；测试 fixture 时前缀 `【示例数据】` |
+| 数据源 | Open-Meteo 地理编码 + 当日预报（免费、无 API Key；`MCP_WEATHER_PROVIDER=fixture` 仅用于测试/离线） |
 | 副作用 | 无（只读） |
 | 鉴权 / PII | 无鉴权、不接收长者身份、不落盘 |
 | 生命周期 | 每次调用起短生命周期子进程，结束即回收；不跨事件循环持有会话 |
-| 超时 | 客户端 5s（测试用 20s） |
-| Agent 可见工具 | `weather_get`、`medication_query`、`media_play`、`media_next`、`media_stop`、`notify_family` |
+| 超时 | Open-Meteo 请求 5s；MCP 客户端外层兜底 8s（`timeout_seconds`） |
+| 缓存 | 最终文本 TTL 600s（进程内，随短生命周期子进程结束失效） |
+| Agent 可见工具 | `weather_get`（描述来自 MCP：查询真实天气，返回可直接朗读的中文）、`medication_query`、`media_play`、`media_next`、`media_stop`、`notify_family` |
 
-审查状态：**AI 生成，待人工复核 diff**（按 AGENTS.md，`mcp-servers/**` 属高风险目录）。复核重点：不新增网络调用、不读取环境密钥、不把长者原文写入 MCP 参数或日志。
+审查状态：**AI 生成，待人工复核 diff**（按 AGENTS.md，`mcp-servers/**` 属高风险目录）。复核重点：仅访问 Open-Meteo 两个域名、不读取环境密钥、不把长者原文写入 MCP 参数或日志。
 
 ## 5. 评测基线
 
@@ -91,7 +94,7 @@ bad case 回流：评测失败样例自动写入 `eval/fixtures/day6_badcases.js
 
 - 多意图判定是启发式（信号类别 ≥ 2，或 1 类信号 + 「再/然后/顺便」），同义表达可能漏判；失败样例进回流池。
 - HITL 目前为进程内存队列，重启即失；Day8 落库并补操作审计。
-- 天气为本地 fixture；接入真实天气需单独授权并补 MCP 鉴权/限流。
+- 真实天气依赖 Open-Meteo 可用性；已做 5s 超时与 10 分钟缓存；常驻 MCP 会话尚未实现，每次调用起短生命周期子进程。
 - 媒体控制仅下发 `control` 事件与前端音量/停止；真实片源点播在 Day7 接入。
 - Laya 适配器与 `_predict` 字段映射未经真实权重验证，禁止在未授权环境下载权重。
 

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "weather",
+      "enabled": true,
+      "transport": "stdio",
+      "args": ["mcp-servers/weather/server.py"],
+      "cwd": ".",
+      "env": {"MCP_WEATHER_PROVIDER": "open_meteo"},
+      "tool_aliases": {"get_weather": "weather_get"},
+      "allow_tools": ["get_weather"],
+      "timeout_seconds": 8,
+      "discovery_timeout_seconds": 10
+    },
+    {
+      "id": "remote_example",
+      "enabled": false,
+      "transport": "streamable_http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "env:MCP_REMOTE_TOKEN"},
+      "tool_prefix": "remote_",
+      "allow_tools": ["search"]
+    }
+  ]
+}

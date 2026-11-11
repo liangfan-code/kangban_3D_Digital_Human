@@ -1,20 +1,82 @@
-"""Day6.3 MCP 集成：真实启动天气 Server 子进程并调用一次工具。"""
+"""Day6.4 MCP 集成：真实 stdio 子进程；默认不访问外网。"""
 
 from __future__ import annotations
 
-from app.agent.mcp_client import McpWeatherClient
+import os
+
+import pytest
+
+from app.agent.mcp_client import McpHost, McpServerConfig
+
+_WEATHER_SCRIPT = "mcp-servers/weather/server.py"
+_ALIAS = {"get_weather": "weather_get"}
+
+
+def _weather_host(server_env: dict[str, str]) -> McpHost:
+    return McpHost(
+        [
+            McpServerConfig(
+                id="weather",
+                args=(_WEATHER_SCRIPT,),
+                cwd=".",
+                env=server_env,
+                tool_aliases=_ALIAS,
+                # 子进程冷启动导入 mcp/httpx 需数秒，测试超时放宽避免误判降级
+                timeout_seconds=60,
+                discovery_timeout_seconds=60,
+            )
+        ]
+    )
 
 
 async def test_real_weather_server_over_stdio():
-    """默认 Server 路径存在且能以本地 fixture 正常返回（不访问外网）。"""
-    result = await McpWeatherClient(timeout_s=20).call_weather("上海")
+    """默认走 fixture Provider：真实子进程返回示例数据，不访问外网。"""
+    host = _weather_host({"MCP_WEATHER_PROVIDER": "fixture"})
+    await host.start()
+
+    result = await host.call("weather_get", {"city": "上海"})
+
     assert result.ok is True, result.error
-    assert "上海" in result.content
     assert "示例数据" in result.content
+    assert "上海" in result.content
 
 
 async def test_missing_server_file_degrades_without_raising():
-    result = await McpWeatherClient(server_path="does-not-exist.py", timeout_s=3).call_weather()
+    host = McpHost(
+        [
+            McpServerConfig(
+                id="weather",
+                args=("mcp-servers/weather/does-not-exist.py",),
+                cwd=".",
+                tool_aliases=_ALIAS,
+                discovery_timeout_seconds=5,
+            )
+        ]
+    )
+
+    await host.start()
+
+    status = host.server_status()[0]
+    assert status["available"] is False
+    assert status["error"]
+
+    result = await host.call("weather_get", {"city": "上海"})
     assert result.ok is False
-    assert result.error is not None
-    assert result.content  # 有可朗读的降级话术
+    assert result.content
+
+
+@pytest.mark.skipif(
+    os.getenv("MCP_WEATHER_LIVE_TEST") != "1",
+    reason="需要显式开启真实天气网络测试",
+)
+async def test_open_meteo_weather_live():
+    """显式开启后访问真实 Open-Meteo：MCP_WEATHER_LIVE_TEST=1 pytest -k live。"""
+    host = _weather_host({"MCP_WEATHER_PROVIDER": "open_meteo"})
+    await host.start()
+
+    result = await host.call("weather_get", {"city": "上海"})
+
+    assert result.ok is True, result.error
+    assert "上海" in result.content
+    assert "Open-Meteo" in result.content
+    assert "示例数据" not in result.content

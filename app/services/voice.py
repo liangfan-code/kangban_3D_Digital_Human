@@ -178,7 +178,7 @@ async def _call_tool(
     result = await build_default_registry().call(name, args, ctx)
     if trace:
         trace.set_meta("tool_calls", name)
-        trace.set_meta("mcp_calls", "1" if name == "weather_get" else "0")
+        trace.set_meta("mcp_calls", "1" if result.mcp_server else "0")
     return result
 
 
@@ -409,7 +409,7 @@ async def _run_agent(
     if trace:
         trace.set_meta("agent_steps", str(result.steps))
         trace.set_meta("tool_calls", ",".join(result.tool_names))
-        trace.set_meta("mcp_calls", str(result.tool_names.count("weather_get")))
+        trace.set_meta("mcp_calls", str(result.mcp_calls))
         if result.degraded:
             trace.degrade(result.degraded)
     return result

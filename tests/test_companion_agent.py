@@ -80,6 +80,38 @@ async def test_agent_react_loop_executes_tool_then_final(monkeypatch):
     assert result.text == "上海今天晴，适合出门。"
     assert result.steps == 2
     assert order == ["weather_get"]
+    assert result.mcp_calls == 0
+
+
+async def test_agent_counts_mcp_tool_calls(monkeypatch):
+    order: list[str] = []
+    registry = ToolRegistry()
+
+    async def weather(args, ctx):  # noqa: ARG001
+        order.append("weather_get")
+        return ToolResult(True, "上海今天晴。", mcp_server="weather")
+
+    registry.register(ToolSpec("weather_get", "查询天气", {"type": "object"}, weather))
+
+    replies = [
+        {"role": "assistant", "content": None, "tool_calls": [_call("c1", "weather_get")]},
+        {"role": "assistant", "content": "上海今天晴，适合出门。"},
+    ]
+
+    async def fake_complete(messages, tools=None, **kwargs):  # noqa: ARG001
+        return replies.pop(0)
+
+    monkeypatch.setattr("app.agent.companion.complete_chat_message", fake_complete)
+
+    result = await respond(
+        "查天气再看看时间",
+        system_prompt="你是康伴",
+        ctx=ToolContext(elder_id="e1"),
+        registry=registry,
+    )
+    assert order == ["weather_get"]
+    assert result.tool_names == ["weather_get"]
+    assert result.mcp_calls == 1
 
 
 async def test_agent_calls_multiple_tools_in_order(monkeypatch):
