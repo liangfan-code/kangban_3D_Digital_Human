@@ -59,3 +59,6 @@ class RouteDecision:
     tool_args: dict[str, str] = field(default_factory=dict)
     escalated_to_agent: bool = False
     needs_clarification: bool = False
+    # 进入主控 Agent 的原因：调用方不得再用自己的词表二次判定。
+    multi_intent: bool = False
+    notify_intent: bool = False

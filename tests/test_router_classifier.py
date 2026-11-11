@@ -81,10 +81,11 @@ def test_high_confidence_weather_maps_to_tool():
 
 
 def test_high_confidence_media_play_carries_genre():
-    decision = route_text("放个越剧听听")
+    # 不带播放动词，规则层不命中，走分类器直调 Tool
+    decision = route_text("黄梅戏")
     assert decision.layer is RouteLayer.CLASSIFIER
     assert decision.tool == "media_play"
-    assert decision.tool_args.get("genre") == "越剧"
+    assert decision.tool_args.get("genre") == "黄梅戏"
 
 
 def test_media_control_maps_to_action():

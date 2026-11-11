@@ -1,0 +1,62 @@
+{"id": "gh-med-01", "text": "我把药吃了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "把字句+完成体"}
+{"id": "gh-med-02", "text": "药吃完了", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "宾语前置"}
+{"id": "gh-med-03", "text": "药还没服", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "否定+服药"}
+{"id": "gh-med-04", "text": "该吃降压药了", "category": "同义/用药", "expect": {"tool": "medication_query"}, "note": "该吃了"}
+{"id": "gh-med-05", "text": "药什么时候吃", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "疑问语序"}
+{"id": "gh-ctrl-01", "text": "声音小一点儿", "category": "夹字/控制", "expect": {"action": "volume_down"}, "note": "小一点儿"}
+{"id": "gh-ctrl-02", "text": "把音量弄小", "category": "语序/控制", "expect": {"action": "volume_down"}, "note": "弄小"}
+{"id": "gh-ctrl-03", "text": "声音关小点", "category": "夹字/控制", "expect": {"action": "volume_down"}, "note": "关小"}
+{"id": "gh-ctrl-04", "text": "先暂停", "category": "同义/控制", "expect": {"action": "media_stop"}, "note": "暂停"}
+{"id": "gh-play-01", "text": "放段豫剧", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "放段+品类缺口"}
+{"id": "gh-play-02", "text": "来段评书", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "评书"}
+{"id": "gh-play-03", "text": "想听红歌", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "红歌"}
+{"id": "gh-play-04", "text": "放个相声", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "相声"}
+{"id": "gh-play-05", "text": "戏曲放一段", "category": "语序/点播", "expect": {"tool": "media_play"}, "note": "宾语前置"}
+{"id": "gh-notify-01", "text": "给我女儿捎句话", "category": "通知", "expect": {"layer": "agent"}, "note": "捎句话"}
+{"id": "gh-notify-02", "text": "联系一下我儿子", "category": "通知", "expect": {"layer": "agent"}, "note": "联系"}
+{"id": "gh-notify-03", "text": "跟闺女说一声", "category": "通知", "expect": {"layer": "agent"}, "note": "说一声"}
+{"id": "gh-time-01", "text": "现在什么时辰", "category": "同义/时间", "expect": {"action": "time_query"}, "note": "老派说法"}
+{"id": "gh-time-02", "text": "今天几号", "category": "同义/时间", "expect": {"action": "time_query"}, "note": "日期"}
+{"id": "gh-neg-01", "text": "别播越剧了", "category": "否定", "expect": {"action": "media_stop", "multi_intent": false}, "note": "别播"}
+{"id": "gh-neg-02", "text": "不要放戏", "category": "否定", "expect": {"action": "media_stop", "multi_intent": false}, "note": "不要放"}
+{"id": "gh-neg-03", "text": "关了吧", "category": "否定", "expect": {"action": "media_stop"}, "note": "关了吧"}
+{"id": "gh-neg-04", "text": "我不服药", "category": "否定", "expect": {"layer": "agent"}, "note": "拒绝服药不得查计划"}
+{"id": "gh-multi-01", "text": "听戏然后呢", "category": "顺承词", "expect": {"multi_intent": false}, "note": "追问不应误升级"}
+{"id": "gh-multi-02", "text": "天气然后呢", "category": "顺承词", "expect": {"multi_intent": false}, "note": "追问不应误升级"}
+{"id": "gh-multi-03", "text": "再给我说一遍", "category": "多意图/重复", "expect": {"action": "repeat"}, "note": "重复变体"}
+{"id": "gh-safe-01", "text": "站不住了", "category": "安全", "expect": {"safety": true}, "note": "跌倒前兆"}
+{"id": "gh-safe-02", "text": "说话有点不利索", "category": "安全", "expect": {"safety": true}, "note": "中风前兆夹字"}
+{"id": "gh-safe-03", "text": "眼前一阵发黑", "category": "安全", "expect": {"safety": true}, "note": "黑矇夹字"}
+{"id": "gh-safe-04", "text": "两条腿发软", "category": "安全", "expect": {"safety": true}, "note": "跌倒前兆"}
+{"id": "gh-safe-05", "text": "手抖得拿不住东西", "category": "安全", "expect": {"safety": true}, "note": "卒中/低血糖"}
+{"id": "gh2-med-01", "text": "药快吃完了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "快+吃完"}
+{"id": "gh2-med-02", "text": "药片吃完了", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "药片+完成体"}
+{"id": "gh2-med-03", "text": "降压药吃了吗", "category": "同义/用药", "expect": {"tool": "medication_query"}, "note": "药名+确认"}
+{"id": "gh2-med-04", "text": "降糖药还没吃", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "未服"}
+{"id": "gh2-med-05", "text": "饭后的药吃了吗", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "时间状语+疑问"}
+{"id": "gh2-med-06", "text": "我不吃药了", "category": "否定", "expect": {"layer": "agent", "tool": null, "multi_intent": false}, "note": "拒绝服药不得查计划"}
+{"id": "gh2-med-07", "text": "不想再吃药了", "category": "否定", "expect": {"layer": "agent", "tool": null}, "note": "拒绝服药+再"}
+{"id": "gh2-ctrl-01", "text": "把音量关小一点", "category": "语序/控制", "expect": {"action": "volume_down"}, "note": "把字句"}
+{"id": "gh2-ctrl-02", "text": "大点儿声", "category": "夹字/控制", "expect": {"action": "volume_up"}, "note": "大点儿声"}
+{"id": "gh2-ctrl-03", "text": "声音调大些", "category": "夹字/控制", "expect": {"action": "volume_up"}, "note": "调大些"}
+{"id": "gh2-ctrl-04", "text": "换个台", "category": "同义/控制", "expect": {"action": "media_next"}, "note": "换个台"}
+{"id": "gh2-ctrl-05", "text": "声音关小点儿", "category": "夹字/控制", "expect": {"action": "volume_down"}, "note": "关小点儿"}
+{"id": "gh2-ctrl-06", "text": "先停一下", "category": "同义/控制", "expect": {"action": "media_stop"}, "note": "先停一下"}
+{"id": "gh2-play-01", "text": "播放豫剧选段", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "播放+品类缺口"}
+{"id": "gh2-play-02", "text": "来首红歌", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "来首+红歌"}
+{"id": "gh2-play-03", "text": "想听相声", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "相声"}
+{"id": "gh2-play-04", "text": "放段评弹", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "评弹"}
+{"id": "gh2-play-05", "text": "我想看沪剧", "category": "同义/点播", "expect": {"tool": "media_play"}, "note": "看+沪剧"}
+{"id": "gh2-time-01", "text": "现在啥时辰", "category": "同义/时间", "expect": {"action": "time_query"}, "note": "啥时辰"}
+{"id": "gh2-time-02", "text": "今天几号了", "category": "同义/时间", "expect": {"action": "time_query"}, "note": "日期"}
+{"id": "gh2-time-03", "text": "现在几点", "category": "同义/时间", "expect": {"action": "time_query"}, "note": "省略了"}
+{"id": "gh2-notify-01", "text": "给我闺女捎个话", "category": "通知", "expect": {"layer": "agent", "notify_intent": true}, "note": "捎个话"}
+{"id": "gh2-notify-02", "text": "打电话给我儿子", "category": "通知", "expect": {"layer": "agent", "notify_intent": true}, "note": "动作前置"}
+{"id": "gh2-notify-03", "text": "跟我女儿说句话", "category": "通知", "expect": {"layer": "agent", "notify_intent": true}, "note": "说句话"}
+{"id": "gh2-guard-01", "text": "我爱听越剧", "category": "误判防护", "expect": {"tool": null, "clarify": true}, "note": "偏好表达不得直接放戏"}
+{"id": "gh2-guard-02", "text": "我不喜欢听戏", "category": "误判防护", "expect": {"layer": "agent", "tool": null}, "note": "负向偏好不得直接放戏"}
+{"id": "gh2-guard-03", "text": "这首歌真好听", "category": "误判防护", "expect": {"layer": "agent", "tool": null}, "note": "评价句不得触发点播"}
+{"id": "gh2-guard-04", "text": "我没说要听戏", "category": "误判防护", "expect": {"layer": "agent", "tool": null}, "note": "否认句不得触发点播"}
+{"id": "gh2-guard-05", "text": "我不想听戏", "category": "否定", "expect": {"action": "media_stop", "multi_intent": false}, "note": "否定播放不得升级"}
+{"id": "gh2-guard-06", "text": "这戏唱得真好听", "category": "误判防护", "expect": {"layer": "agent", "tool": null}, "note": "评价句（带品类词）不得触发点播；provider 分歧句"}
+{"id": "gh2-guard-07", "text": "把那个红楼梦放一段", "category": "误判防护", "expect": {"layer": "rule", "intent": "media_play", "tool": "media_play"}, "note": "provider 分歧句：明确点播意图，本地不得漏成闲聊"}

@@ -152,6 +152,35 @@ async def test_multi_intent_preempts_clarification(api, seed, monkeypatch):
     assert body["reply"] != "您是想聊聊天，还是想听段戏或者查查天气？"
 
 
+async def test_notify_single_intent_enters_agent(api, seed, monkeypatch):
+    """「给孩子打个电话」是单意图，也必须进 Agent 调 notify_family。"""
+    from app.agent.companion import AgentResult
+
+    seen: dict[str, str] = {}
+
+    async def fake_agent(text, **kwargs):
+        seen["text"] = text
+        return AgentResult(
+            text="已经帮您转人工确认，稍后有人联系您女儿。",
+            tool_names=["notify_family"],
+            steps=1,
+        )
+
+    monkeypatch.setattr("app.services.voice.llm_is_configured", lambda: True)
+    monkeypatch.setattr("app.services.voice.agent_respond", fake_agent)
+
+    token = await _device_token(api, seed, "single")
+    resp = await api.post(
+        "/api/v1/voice/text",
+        json={"text": "给孩子打个电话"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["reply"] == "已经帮您转人工确认，稍后有人联系您女儿。"
+    assert seen["text"] == "给孩子打个电话", "单意图通知没有进入 Agent"
+
+
 async def test_text_chat_llm_failure_falls_back_to_template(api, seed, monkeypatch):
     """LLM 抛错：不向上抛 5xx，改模板回复并标 degraded。"""
 

@@ -55,6 +55,9 @@ def execute_rule(decision: RouteDecision) -> RuleOutcome | None:
         return RuleOutcome("好，我小声一点。", ({"type": "control", "action": "volume_down"},))
     if action == "media_stop":
         return RuleOutcome("好，我停下了。", ({"type": "control", "action": "stop"},))
+    if action == "media_defer":
+        # 「先别放，等我吃完药」：不立即播，也不当成停止指令，只说先等着
+        return RuleOutcome("好，那我先不放了，等您忙完再说。")
     if action == "media_play":
         genre = decision.tool_args.get("genre") or "戏曲"
         return RuleOutcome(

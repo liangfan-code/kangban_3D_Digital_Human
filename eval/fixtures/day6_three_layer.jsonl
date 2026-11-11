@@ -1,0 +1,42 @@
+{"id": "rule-01", "text": "换一段", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": null, "expected_action": "media_next", "note": "R01 换一段"}
+{"id": "rule-02", "text": "下一首", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": null, "expected_action": "media_next", "note": "R01 同义变体"}
+{"id": "rule-03", "text": "大声点", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R02", "expected_tool": null, "expected_action": "volume_up", "note": "R02 大声点"}
+{"id": "rule-04", "text": "小声点", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R03", "expected_tool": null, "expected_action": "volume_down", "note": "R03 小声点"}
+{"id": "rule-05", "text": "停", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R04", "expected_tool": null, "expected_action": "media_stop", "note": "R04 停"}
+{"id": "rule-06", "text": "我想听越剧", "expected_layer": "rule", "expected_intent": "media_play", "expected_rule_id": "R05", "expected_tool": "media_play", "expected_action": "media_play", "note": "R05 戏曲点播（P1 起同时携带 Tool，供评测/Agent 复用）"}
+{"id": "rule-07", "text": "放一首京剧", "expected_layer": "rule", "expected_intent": "media_play", "expected_rule_id": "R05", "expected_tool": "media_play", "expected_action": "media_play", "note": "R05 同义变体"}
+{"id": "rule-08", "text": "几点了", "expected_layer": "rule", "expected_intent": "other", "expected_rule_id": "R06", "expected_tool": null, "expected_action": "time_query", "note": "R06 时间"}
+{"id": "rule-09", "text": "今天天气怎么样", "expected_layer": "rule", "expected_intent": "weather", "expected_rule_id": "R07", "expected_tool": "weather_get", "expected_action": "weather_query", "note": "R07 天气"}
+{"id": "rule-10", "text": "我要吃药", "expected_layer": "rule", "expected_intent": "medication_query", "expected_rule_id": "R08", "expected_tool": "medication_query", "expected_action": "medication_query", "note": "R08 用药"}
+{"id": "rule-11", "text": "再见", "expected_layer": "rule", "expected_intent": "chitchat", "expected_rule_id": "R09", "expected_tool": null, "expected_action": "farewell", "note": "R09 再见"}
+{"id": "rule-12", "text": "重复一遍", "expected_layer": "rule", "expected_intent": "other", "expected_rule_id": "R10", "expected_tool": null, "expected_action": "repeat", "note": "R10 重复"}
+
+{"id": "cls-med-01", "text": "我的降压药还剩几颗", "expected_layer": "classifier", "expected_intent": "medication_query", "expected_rule_id": null, "expected_tool": "medication_query", "expected_action": null, "note": "规则未命中：用药计划查询"}
+{"id": "cls-med-02", "text": "漏吃一次药有什么副作用", "expected_layer": "classifier", "expected_intent": "medication_query", "expected_rule_id": null, "expected_tool": "medication_query", "expected_action": null, "note": "规则未命中：漏服与副作用"}
+{"id": "cls-med-03", "text": "药盒里还有几颗", "expected_layer": "classifier", "expected_intent": "medication_query", "expected_rule_id": null, "expected_tool": "medication_query", "expected_action": null, "note": "规则未命中：剩余药量"}
+{"id": "cls-med-04", "text": "降糖药饭前吃还是饭后吃，副作用大吗", "expected_layer": "classifier", "expected_intent": "medication_query", "expected_rule_id": null, "expected_tool": "medication_query", "expected_action": null, "note": "规则未命中：服药时间"}
+{"id": "cls-med-05", "text": "这个药片一天吃几颗", "expected_layer": "classifier", "expected_intent": "medication_query", "expected_rule_id": null, "expected_tool": "medication_query", "expected_action": null, "note": "规则未命中：剂量"}
+{"id": "cls-play-01", "text": "邓丽君的唱段还有吗", "expected_layer": "classifier", "expected_intent": "media_play", "expected_rule_id": null, "expected_tool": "media_play", "expected_action": null, "note": "规则 R05 要求播放动词，未命中"}
+{"id": "cls-play-02", "text": "有没有黄梅戏的唱段", "expected_layer": "classifier", "expected_intent": "media_play", "expected_rule_id": null, "expected_tool": "media_play", "expected_action": null, "note": "规则未命中：无点播动词"}
+{"id": "cls-play-03", "text": "越剧的唱段还有吗", "expected_layer": "classifier", "expected_intent": "media_play", "expected_rule_id": null, "expected_tool": "media_play", "expected_action": null, "note": "规则未命中：无播放动词（偏好表达改走澄清，不放戏）"}
+{"id": "cls-play-04", "text": "老电影和戏曲都行", "expected_layer": "classifier", "expected_intent": "media_play", "expected_rule_id": null, "expected_tool": "media_play", "expected_action": null, "note": "规则未命中：品类偏好"}
+{"id": "cls-play-05", "text": "唱段里有没有沪剧", "expected_layer": "classifier", "expected_intent": "media_play", "expected_rule_id": null, "expected_tool": "media_play", "expected_action": null, "note": "规则未命中：询问式点播"}
+{"id": "cls-ctrl-01", "text": "声音有点太大了", "expected_layer": "classifier", "expected_intent": "media_control", "expected_rule_id": null, "expected_tool": null, "expected_action": "volume_down", "note": "规则整句锚定未命中"}
+{"id": "cls-ctrl-02", "text": "声音太吵了", "expected_layer": "classifier", "expected_intent": "media_control", "expected_rule_id": null, "expected_tool": null, "expected_action": "volume_down", "note": "规则未命中：抱怨式"}
+{"id": "cls-ctrl-03", "text": "音量太大了", "expected_layer": "classifier", "expected_intent": "media_control", "expected_rule_id": null, "expected_tool": null, "expected_action": "volume_down", "note": "规则未命中：音量表达"}
+{"id": "cls-ctrl-04", "text": "听不清，声音再大些", "expected_layer": "classifier", "expected_intent": "media_control", "expected_rule_id": null, "expected_tool": null, "expected_action": "volume_up", "note": "规则未命中：听不清"}
+{"id": "cls-ctrl-05", "text": "换台吧", "expected_layer": "classifier", "expected_intent": "media_control", "expected_rule_id": null, "expected_tool": null, "expected_action": "media_next", "note": "规则 R01 只收换一段等整句"}
+{"id": "cls-wtr-01", "text": "降温了，冷不冷啊", "expected_layer": "classifier", "expected_intent": "weather", "expected_rule_id": null, "expected_tool": "weather_get", "expected_action": null, "note": "规则未命中：无天气二字"}
+{"id": "cls-wtr-02", "text": "风大不大，适合晒被子吗", "expected_layer": "classifier", "expected_intent": "weather", "expected_rule_id": null, "expected_tool": "weather_get", "expected_action": null, "note": "规则未命中：生活化天气"}
+{"id": "cls-wtr-03", "text": "明天要下雪吗，会不会降温", "expected_layer": "classifier", "expected_intent": "weather", "expected_rule_id": null, "expected_tool": "weather_get", "expected_action": null, "note": "规则只收下雨/冷不冷/热不热"}
+{"id": "cls-wtr-04", "text": "屋里潮，外面风大吗，降温没", "expected_layer": "classifier", "expected_intent": "weather", "expected_rule_id": null, "expected_tool": "weather_get", "expected_action": null, "note": "规则要求外面+天气连用"}
+{"id": "cls-wtr-05", "text": "晒被子合适吗，风大不大", "expected_layer": "classifier", "expected_intent": "weather", "expected_rule_id": null, "expected_tool": "weather_get", "expected_action": null, "note": "规则未命中：间接问天气"}
+
+{"id": "agent-01", "text": "你好啊，陪我聊会儿天", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "闲聊：需要上下文"}
+{"id": "agent-02", "text": "我想家了", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "情感陪伴"}
+{"id": "agent-03", "text": "帮我量一下血压", "expected_layer": "agent", "expected_intent": "health_collect", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "健康采集走多轮"}
+{"id": "agent-04", "text": "我想听越剧，然后量个血压", "expected_layer": "agent", "expected_intent": "other", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "多意图必须先于 R05 升级"}
+{"id": "agent-05", "text": "我孙子最近怎么样", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "家人话题"}
+{"id": "agent-06", "text": "我最近睡不好", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "无任务特征默认闲聊"}
+{"id": "agent-07", "text": "早上好呀", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "问候"}
+{"id": "agent-08", "text": "我有点孤单", "expected_layer": "agent", "expected_intent": "chitchat", "expected_rule_id": null, "expected_tool": null, "expected_action": null, "note": "情绪陪伴"}

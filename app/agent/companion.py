@@ -1,8 +1,8 @@
 """主控 Agent（Day6.3）：ReAct + Tool Calling 循环。
 
 边界：
-- 只有多意图/需要组合动作的句子才进入这里（``looks_multi_intent``），
-  普通闲聊继续走原有流式 LLM，避免无谓的工具轮次；
+- 只有多意图/需要组合动作/通知家属的句子才进入这里（``looks_multi_intent``
+  与路由的 notify_intent），普通闲聊继续走原有流式 LLM，避免无谓的工具轮次；
 - 最多 4 步、每步最多 2 个工具，并复用 Day5.4 的 ``ToolLoopGuard``；
 - 工具参数里的 ``elder_id`` 一律忽略，执行上下文由服务端注入；
 - 任何失败都返回可朗读的降级结果，不向长者抛异常。
@@ -16,6 +16,17 @@ from typing import Any
 
 from app.agent.tools import ToolContext, ToolRegistry, build_default_registry
 from app.integrations.llm import LlmUnavailable, complete_chat_message
+from app.router.signals import (
+    CONTROL_WORDS,
+    HEALTH_WORDS,
+    MEDIA_GENRES,
+    MEDICATION_WORDS,
+    NOTIFY_VERBS,
+    TIME_WORDS,
+    WEATHER_WORDS,
+    is_deferred_play_command,
+    is_negated_play_command,
+)
 from app.services.tool_guard import ToolLoopGuard, ToolLoopTripped
 
 AGENT_MAX_STEPS = 4
@@ -32,48 +43,34 @@ _AGENT_GUIDE = (
 
 # 多意图信号：命中两类及以上，或用「然后/顺便」等顺承词串起一个动作。
 # 媒体点播与播放控制分开计数：一句话里同时出现两者也必须进主控 Agent。
+# 词表统一来自 app.router.signals，避免路由层与 Agent 层各维护一份。
 _SIGNALS: dict[str, tuple[str, ...]] = {
-    "medication": ("吃药", "服药", "药盒", "药片", "降压药", "漏吃"),
-    "media_play": (
-        "放戏",
-        "听戏",
-        "越剧",
-        "京剧",
-        "黄梅戏",
-        "沪剧",
-        "老歌",
-        "电影",
-        "评弹",
-        "戏曲",
-        "邓丽君",
-    ),
-    "media_control": (
-        "大声点",
-        "小声点",
-        "声音大",
-        "声音小",
-        "音量大",
-        "音量小",
-        "调大",
-        "调小",
-        "换一段",
-        "换台",
-        "换一首",
-        "下一段",
-        "下一首",
-        "别放",
-        "停下",
-    ),
-    "notify": ("告诉", "通知", "联系", "打电话", "发消息", "转告"),
-    "weather": ("天气", "下雨", "下雪", "降温", "冷不冷", "热不热"),
-    "time": ("几点", "什么时间", "几号", "星期几", "时间了"),
-    "health": ("血压", "血糖", "心率", "血氧"),
+    "medication": MEDICATION_WORDS,
+    "media_play": MEDIA_GENRES,
+    "media_control": CONTROL_WORDS,
+    "notify": NOTIFY_VERBS,
+    "weather": WEATHER_WORDS,
+    "time": TIME_WORDS,
+    "health": HEALTH_WORDS,
 }
 
 # 顺承词：只有一类信号时，出现这些词说明后面还跟着另一个需求。
 # 不收单字「再」和「还有」：老年人常说「再听一遍」「降压药还有几颗」，
 # 这类单一意图被误升级会多一次模型轮次。
 _CONNECTORS = ("然后", "顺便", "接着", "另外", "同时", "以及")
+
+# 否定/延后播放的判定在 signals 里（与规则层共用同一份正则），
+# 这里导入后继续作为 companion 的公开名字，避免调用方改 import 路径。
+__all__ = [
+    "AgentResult",
+    "AgentUnavailable",
+    "is_deferred_play_command",
+    "is_negated_play_command",
+    "intent_signal_count",
+    "looks_multi_intent",
+    "respond",
+]
+
 
 
 @dataclass
@@ -96,12 +93,32 @@ def intent_signal_count(text: str) -> int:
     return sum(1 for words in _SIGNALS.values() if any(word in text for word in words))
 
 
+def _has_second_request(text: str) -> bool:
+    """顺承词后面是否真的跟着第二个需求。
+
+    「顺便问一下几点了」的顺承词在句首，只是客套；「听戏然后呢」后面只有
+    语气词，是对上一轮的追问。这两种都不能升级 Agent。
+    """
+    for word in _CONNECTORS:
+        start = text.find(word)
+        while start != -1:
+            if start > 0:
+                tail = text[start + len(word) :].strip("，,。！？!?、；;：:…~～ ")
+                if len(tail) >= 2:
+                    return True
+            start = text.find(word, start + 1)
+    return False
+
+
 def looks_multi_intent(text: str) -> bool:
-    """粗筛多意图：命中两类以上工具信号，或顺承词串起一个动作。"""
+    """粗筛多意图：命中两类以上工具信号，或顺承词串起第二个需求。"""
+    # 否定/延后指令是单动作，不能因为「别放」+「越剧」被算成两个需求
+    if is_deferred_play_command(text) or is_negated_play_command(text):
+        return False
     hits = intent_signal_count(text)
     if hits >= 2:
         return True
-    return hits >= 1 and any(word in text for word in _CONNECTORS)
+    return hits >= 1 and _has_second_request(text)
 
 
 def _parse_args(raw: Any) -> dict[str, Any]:

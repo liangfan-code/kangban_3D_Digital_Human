@@ -39,7 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from websockets.exceptions import WebSocketException
 
-from app.agent.companion import AgentResult, AgentUnavailable, looks_multi_intent
+from app.agent.companion import AgentResult, AgentUnavailable
 from app.agent.companion import respond as agent_respond
 from app.agent.tools import ToolContext, ToolResult, build_default_registry
 from app.core.config import get_settings
@@ -59,7 +59,7 @@ from app.models import Elder, Voiceprint
 from app.models.enums import DeviceStatus, ElderStatus, IdentitySource, VoiceprintStatus
 from app.router.executor import execute_rule, safety_reply
 from app.router.schemas import RouteDecision, RouteLayer
-from app.router.service import route_text
+from app.router.service import clarify_reply, route_text
 from app.services import actions as action_service
 from app.services import context_summary, conversation_store
 from app.services.hitl import hitl_queue
@@ -69,7 +69,6 @@ from app.services.session_state import get_session_store
 from app.services.slot_extractor import extract_slots
 from app.services.viseme import build_viseme_timeline
 from app.services.workorder import build_context_snapshot, create_sensitive_work_order
-from app.system_one.questions import CLARIFY_QUESTION
 
 logger = get_logger(__name__)
 
@@ -168,6 +167,8 @@ def _apply_route_trace(trace: TurnTrace | None, decision: RouteDecision) -> None
     trace.set_meta("escalated_to_agent", "true" if decision.escalated_to_agent else "false")
     if decision.confidence is not None:
         trace.set_meta("route_confidence", f"{decision.confidence:.3f}")
+    trace.set_meta("multi_intent", "true" if decision.multi_intent else "false")
+    trace.set_meta("notify_intent", "true" if decision.notify_intent else "false")
 
 
 async def _call_tool(
@@ -382,13 +383,14 @@ def _enqueue_sensitive(
 
 async def _run_agent(
     text: str,
+    decision: RouteDecision,
     tool_ctx: ToolContext,
     history: list,
     context_text: str | None,
     trace: TurnTrace | None = None,
 ) -> AgentResult | None:
-    """多意图才进主控 Agent；不可用/失败返回 None，由上层回落流式 LLM。"""
-    if not (looks_multi_intent(text) and llm_is_configured()):
+    """多意图/需通知家属才进主控 Agent；判定只看路由结果，不再二次判词。"""
+    if not ((decision.multi_intent or decision.notify_intent) and llm_is_configured()):
         return None
     if trace:
         trace.set_meta("llm_called", "true")
@@ -603,13 +605,13 @@ async def generate_text_reply(
     elif decision.layer in (RouteLayer.CLASSIFIER, RouteLayer.AGENT):
         # 多意图必须先于低置信澄清：否则「吃完药放戏再告诉我儿子」会被反问截断
         agent_result = await _run_agent(
-            text, tool_ctx, history, context_text, trace
+            text, decision, tool_ctx, history, context_text, trace
         )
         if agent_result is not None:
             reply = agent_result.text
         elif decision.layer is RouteLayer.CLASSIFIER:
             if decision.needs_clarification:
-                reply = CLARIFY_QUESTION
+                reply = clarify_reply(decision)
             elif decision.tool:
                 result = await _call_tool(decision.tool, decision.tool_args, tool_ctx, trace)
                 reply = result.content
@@ -1456,7 +1458,7 @@ class VoiceSession:
         if decision.layer in (RouteLayer.CLASSIFIER, RouteLayer.AGENT):
             # 多意图先于低置信澄清，避免组合请求被反问截断
             agent_result = await _run_agent(
-                final_text, tool_ctx, history, context_text, trace
+                final_text, decision, tool_ctx, history, context_text, trace
             )
             if agent_result is not None:
                 for event in agent_result.client_events:
@@ -1468,7 +1470,7 @@ class VoiceSession:
 
         if decision.layer is RouteLayer.CLASSIFIER:
             if decision.needs_clarification:
-                reply = CLARIFY_QUESTION
+                reply = clarify_reply(decision)
                 await self._emit_sentence(reply, trace)
                 await self._save_turn(thread_id, final_text, reply)
                 self._last_reply = reply

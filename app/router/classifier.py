@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.router.rules import normalize_text
 from app.router.safety import match_sensitive
 from app.router.schemas import ClassifierResult, Intent
+from app.router.signals import MEDIA_GENRES
 from app.system_one.questions import PRIVACY_KEYWORDS
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,20 @@ DIRECT_INTENTS: frozenset[Intent] = frozenset(
         Intent.MEDIA_CONTROL,
         Intent.WEATHER,
     }
+)
+
+# 媒体品类词与规则层同源（app.router.signals.MEDIA_GENRES）；
+# 单字「戏/歌」只作规则层的动词宾语，不做关键词，避免「游戏/歌声」误命中。
+_GENRE_WEIGHTS: Mapping[str, float] = {
+    "戏曲": 0.8,
+    "老歌": 0.8,
+    "电影": 0.8,
+    "唱段": 0.8,
+}
+_MEDIA_GENRE_KEYWORDS: tuple[tuple[str, float], ...] = tuple(
+    (genre, _GENRE_WEIGHTS.get(genre, 1.0))
+    for genre in MEDIA_GENRES
+    if genre not in {"戏", "歌"}
 )
 
 # 关键词 -> 权重：强特征 1.0，弱特征 0.4~0.6
@@ -47,21 +62,7 @@ _KEYWORDS: Mapping[Intent, tuple[tuple[str, float], ...]] = {
         ("该吃", 0.6),
         ("药还", 0.6),
     ),
-    Intent.MEDIA_PLAY: (
-        ("越剧", 1.0),
-        ("京剧", 1.0),
-        ("黄梅戏", 1.0),
-        ("沪剧", 1.0),
-        ("评弹", 1.0),
-        ("戏曲", 0.8),
-        ("听戏", 0.8),
-        ("放戏", 0.8),
-        ("老歌", 0.8),
-        ("邓丽君", 1.0),
-        ("电影", 0.8),
-        ("唱段", 0.8),
-        ("歌", 0.4),
-    ),
+    Intent.MEDIA_PLAY: _MEDIA_GENRE_KEYWORDS,
     Intent.MEDIA_CONTROL: (
         ("声音", 0.6),
         ("音量", 0.8),

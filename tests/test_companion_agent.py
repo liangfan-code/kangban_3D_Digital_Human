@@ -199,6 +199,31 @@ async def test_tool_loop_guard_stops_second_call(monkeypatch):
     assert order == ["weather_get"]
 
 
+async def test_single_notify_intent_calls_notify_family(monkeypatch):
+    """单意图通知也要真的调到 notify_family，而不是当闲聊敷衍过去。"""
+    replies = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_call("c1", "notify_family", {"message": "跟女儿报个平安"})],
+        },
+        {"role": "assistant", "content": "已经帮您转人工确认，稍后有人联系您女儿。"},
+    ]
+
+    async def fake_complete(messages, tools=None, **kwargs):  # noqa: ARG001
+        return replies.pop(0)
+
+    monkeypatch.setattr("app.agent.companion.complete_chat_message", fake_complete)
+
+    result = await respond(
+        "给孩子打个电话",
+        system_prompt="你是康伴",
+        ctx=ToolContext(elder_id="e1", device_id="dev-1"),
+    )
+    assert result.tool_names == ["notify_family"]
+    assert "转人工" in result.text
+
+
 async def test_empty_final_reply_raises(monkeypatch):
     async def fake_complete(messages, tools=None, **kwargs):  # noqa: ARG001
         return {"role": "assistant", "content": ""}
