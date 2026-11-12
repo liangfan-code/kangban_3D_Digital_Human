@@ -58,6 +58,7 @@ class JsonFormatter(logging.Formatter):
             "turn_total_ms",
             "asr_connect_ms",
             "asr_e2e_ms",
+            "asr_ms",
             "llm_first_token_ms",
             "llm_total_ms",
             "a2a_ms",
@@ -101,7 +102,12 @@ class JsonFormatter(logging.Formatter):
             "classifier_ms",
             "agent_steps",
             "tool_calls",
+            # Day7 段7 任务级 trace：本轮工具调用顺序与回复长度（只记元数据）
+            "tools",
+            "reply_chars",
             "mcp_calls",
+            "server_id",
+            "ok",
             # Day7 段4 定时用药外呼：只记任务/设备/通道/计数等元数据
             "attempt",
             "attempt_before",

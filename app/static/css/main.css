@@ -161,11 +161,17 @@ a:hover { text-decoration: underline; }
 
 .page-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 20px;
   flex-wrap: wrap;
-  margin: 18px 0 6px;
+  margin: 22px 0 8px;
+}
+
+/* 说明文字限宽，避免长句在宽屏上拉成一条细线 */
+.page-head .faint {
+  max-width: 64ch;
+  line-height: 1.55;
 }
 
 .topbar {
@@ -220,9 +226,9 @@ a:hover { text-decoration: underline; }
 
 .card-title {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   margin-bottom: 12px;
 }
 
@@ -231,8 +237,14 @@ a:hover { text-decoration: underline; }
   gap: 14px;
 }
 
-.grid-2 { grid-template-columns: repeat(2, 1fr); }
-.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* 三卡在 900–1100px 并排会挤压长中文：工作台先降 2 列，平板再降 1 列
+   （限定 .page，避免影响长者页 860px 容器内的三卡） */
+@media (max-width: 1100px) {
+  .page .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 @media (max-width: 860px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
@@ -431,6 +443,12 @@ a:hover { text-decoration: underline; }
 
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
+
+/* 管理台 8 个页签在平板宽度不折行，改为单行横滚 */
+@media (max-width: 900px) {
+  .tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
+  .tab { flex: 0 0 auto; padding: 8px 18px; }
+}
 
 /* ---------- 表格（大字号适老） ---------- */
 
@@ -671,9 +689,14 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .role-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   margin-top: 26px;
+}
+
+/* 5 张角色卡在 861–1024px 用 2 列，避免第二行只剩孤卡 */
+@media (max-width: 1024px) and (min-width: 861px) {
+  .role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 860px) {
@@ -818,6 +841,9 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mt-8 { margin-top: 8px; }
 .mt-16 { margin-top: 16px; }
 .mt-24 { margin-top: 24px; }
+/* 异步挂载区块在数据回来前不占位，避免页头下出现空洞 */
+#workorders:empty,
+#family-medication:empty { display: none; }
 .flex-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .spacer { flex: 1; }

@@ -172,6 +172,10 @@ def _apply_route_trace(trace: TurnTrace | None, decision: RouteDecision) -> None
         trace.set_meta("route_confidence", f"{decision.confidence:.3f}")
     trace.set_meta("multi_intent", "true" if decision.multi_intent else "false")
     trace.set_meta("notify_intent", "true" if decision.notify_intent else "false")
+    # 语音通道此时已完成 ASR：补一个统一字段名，方便任务级 trace 对齐
+    asr_e2e = trace.payload().get("asr_e2e_ms")
+    if isinstance(asr_e2e, int | float):
+        trace.set_meta("asr_ms", f"{float(asr_e2e):.1f}")
 
 
 async def _call_tool(
@@ -183,6 +187,9 @@ async def _call_tool(
     """执行一次 Tool；只记工具名与 MCP 次数，不记参数内容。"""
     result = await build_default_registry().call(name, args, ctx)
     if trace:
+        # tools 保留本轮全部工具的有序轨迹；tool_calls 保持兼容（最后一次）
+        previous = trace.payload().get("tools")
+        trace.set_meta("tools", f"{previous},{name}" if previous else name)
         trace.set_meta("tool_calls", name)
         trace.set_meta("mcp_calls", "1" if result.mcp_server else "0")
     return result
@@ -434,6 +441,8 @@ async def _run_agent(
     if trace:
         trace.set_meta("agent_steps", str(result.steps))
         trace.set_meta("tool_calls", ",".join(result.tool_names))
+        if result.tool_names:
+            trace.set_meta("tools", ",".join(result.tool_names))
         trace.set_meta("mcp_calls", str(result.mcp_calls))
         if result.degraded:
             trace.degrade(result.degraded)
@@ -676,6 +685,7 @@ async def generate_text_reply(
             reply = action_service.parse_action_markers(template_reply(text))[0]
 
     await _persist_turn(db, thread_id, text, reply)
+    trace.set_meta("reply_chars", str(len(reply)))
     trace.mark("done")
     trace.log(event="text_latency")
     return reply, trace
@@ -1417,6 +1427,7 @@ class VoiceSession:
             return
 
         reply = await self._reply_and_respond(final_text, trace)
+        trace.set_meta("reply_chars", str(len(reply)))
         await self.send_event({"type": "done", "text": final_text, "reply": reply})
         trace.mark("done")
         trace.log()

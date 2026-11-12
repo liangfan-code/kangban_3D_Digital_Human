@@ -437,9 +437,19 @@ class McpHost:
             )
             if not text:
                 raise RuntimeError("MCP 返回空内容")
-            return McpCallResult(
-                True, text, int((perf_counter() - started) * 1000), server_id=info.server_id
+            elapsed_ms = int((perf_counter() - started) * 1000)
+            # 成功调用补一条结构化日志：只记 Server/工具/耗时，不记参数与返回正文
+            logger.info(
+                "MCP 工具调用成功",
+                extra={
+                    "event": "mcp_call_ok",
+                    "server_id": info.server_id,
+                    "tool_name": info.remote_name,
+                    "elapsed_ms": elapsed_ms,
+                    "ok": True,
+                },
             )
+            return McpCallResult(True, text, elapsed_ms, server_id=info.server_id)
         except Exception as exc:  # noqa: BLE001 —— 外部进程/网络异常统一降级
             logger.warning(
                 "MCP 工具调用失败：server=%s tool=%s error=%s",

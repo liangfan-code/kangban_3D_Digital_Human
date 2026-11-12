@@ -9,21 +9,21 @@
     /* 适老大字号状态条（Day3 规划 D3 决策：独立语音测试页） */
     .voice-status {
       font-size: 28px; font-weight: 700; text-align: center;
-      padding: 20px 16px; border: 3px solid #ccc; border-radius: 14px;
-      margin: 16px 0; background: #fff; min-height: 76px;
+      padding: 20px 16px; border: 3px solid var(--line); border-radius: 14px;
+      margin: 16px 0; background: var(--card); min-height: 76px;
     }
-    .voice-status.ok    { border-color: #2e7d32; color: #2e7d32; }
-    .voice-status.warn  { border-color: #ef6c00; color: #b26a00; }
-    .voice-status.err   { border-color: #c62828; color: #c62828; }
-    .voice-score { font-size: 18px; color: #666; text-align: center; min-height: 24px; }
+    .voice-status.ok    { border-color: var(--moss); color: var(--moss-text); }
+    .voice-status.warn  { border-color: var(--amber); color: var(--amber-text); }
+    .voice-status.err   { border-color: var(--lacquer); color: var(--lacquer); }
+    .voice-score { font-size: 18px; color: var(--ink-soft); text-align: center; min-height: 24px; }
     .voice-log {
-      font-size: 18px; line-height: 1.6; background: #fafafa; border: 1px solid #e0e0e0;
+      font-size: 18px; line-height: 1.6; background: var(--state-bg); border: 1px solid var(--line);
       border-radius: 10px; padding: 14px; min-height: 120px; max-height: 320px; overflow-y: auto;
       white-space: pre-wrap; word-break: break-all;
     }
-    .voice-log .t { color: #2e7d32; }
-    .voice-log .r { color: #1565c0; }
-    .voice-log .e { color: #c62828; }
+    .voice-log .t { color: var(--moss-text); }
+    .voice-log .r { color: var(--clay); }
+    .voice-log .e { color: var(--lacquer); }
     .btn-voice { font-size: 22px; padding: 14px 30px; border-radius: 12px; }
     .voice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
     /* 3D 引擎按 canvas 自身 clientWidth 计算 buffer：必须钉死 CSS 尺寸，
@@ -44,14 +44,14 @@
     <section class="card" id="login-card">
       <h2 id="login-title" style="margin-top:0;">1️⃣ 设备登录</h2>
       <div id="device-status-bar"
-           style="display:none;font-size:17px;font-weight:600;color:#2e7d32;padding:6px 0;"></div>
+           style="display:none;font-size:17px;font-weight:600;color:var(--moss-text);padding:6px 0;"></div>
       <div id="login-form-wrap">
-        <p style="color:#666;">粘贴<b>设备 Token</b>（eyJhbGci 开头，管理端签发；人 JWT 在此会被 403 拒绝）。</p>
+        <p style="color:var(--ink-soft);">粘贴<b>设备 Token</b>（eyJhbGci 开头，管理端签发；人 JWT 在此会被 403 拒绝）。</p>
         <div id="login-reason"
-             style="display:none;color:#c62828;font-size:15px;margin-bottom:8px;font-weight:600;"></div>
+             style="display:none;color:var(--lacquer);font-size:15px;margin-bottom:8px;font-weight:600;"></div>
         <div style="display:flex; gap:8px;">
           <input id="device-token" type="password" placeholder="设备 Token"
-                 style="flex:1; font-size:16px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
+                 style="flex:1; font-size:16px; padding:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px;" />
           <button class="btn btn-primary btn-voice" id="btn-login">连接语音</button>
         </div>
         <!-- 老人兜底：凭证缺失/失效时不要求粘贴 Token，回入口页重新走生物识别 -->
@@ -68,8 +68,8 @@
     <section class="card" id="avatar-card">
       <h2 style="margin-top:0;">🧑‍🦳 3D 数字人</h2>
       <div id="avatarHomeSlot"
-           style="width:100%; aspect-ratio: 4 / 3; border-radius:12px; overflow:hidden; background:#f2f6ff;"></div>
-      <div id="avatarHomeStatus" style="color:#999; font-size:14px; text-align:center; margin-top:6px;">数字人加载中…</div>
+           style="width:100%; aspect-ratio: 4 / 3; border-radius:12px; overflow:hidden; background:var(--state-bg);"></div>
+      <div id="avatarHomeStatus" style="color:var(--ink-faint); font-size:14px; text-align:center; margin-top:6px;">数字人加载中…</div>
       <!-- 一键切换形象：boot.js 就绪后自动渲染按钮组（选择存 localStorage，通话中可切换） -->
       <div id="kbAvatarSwitcher"></div>
     </section>
@@ -94,36 +94,36 @@
           <div class="voice-log" id="log-reply">—</div>
         </div>
       </div>
-      <div id="confirm-box" style="display:none; margin-top:12px; padding:14px; border:2px solid #ef6c00; border-radius:10px;">
-        <div style="font-size:20px; font-weight:700; color:#b26a00;">声纹多次未通过，请确认身份：</div>
+      <div id="confirm-box" style="display:none; margin-top:12px; padding:14px; border:2px solid var(--amber); border-radius:10px;">
+        <div style="font-size:20px; font-weight:700; color:var(--amber-text);">声纹多次未通过，请确认身份：</div>
         <div id="confirm-candidates" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;"></div>
       </div>
-      <details style="margin-top:12px; color:#555; font-size:14px;">
+      <details style="margin-top:12px; color:var(--ink-soft); font-size:14px;">
         <summary style="cursor:pointer;">🔐 管理员通道录入（双人间设备必须走此通道，单人间用上面按钮即可）</summary>
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
           <input id="admin-token" type="password" placeholder="管理员 JWT（POST /api/v1/auth/login 的 access_token）"
-                 style="flex:3; min-width:240px; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:8px;" />
+                 style="flex:3; min-width:240px; font-size:14px; padding:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px;" />
           <input id="admin-elder" placeholder="长者 elder_id（UUID，GET /api/v1/elders 可查）"
-                 style="flex:2; min-width:200px; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:8px;" />
+                 style="flex:2; min-width:200px; font-size:14px; padding:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px;" />
           <button class="btn btn-ghost" id="btn-enroll-admin">🗝️ 管理员录入</button>
         </div>
-        <p style="color:#999; margin:6px 0 0;">双人间规则：设备无法自行决定声纹归属，须管理员指定长者，防止声纹挂错人（ADR-005）。</p>
+        <p style="color:var(--ink-faint); margin:6px 0 0;">双人间规则：设备无法自行决定声纹归属，须管理员指定长者，防止声纹挂错人（ADR-005）。</p>
       </details>
     </section>
 
     <!-- 降级文字通道 -->
-    <section class="card" id="fallback-card" style="display:none; border-color:#ef6c00;">
-      <h2 style="margin-top:0; color:#b26a00;">⚠️ 语音服务暂不可用</h2>
-      <p id="fallback-reason" style="color:#666;"></p>
+    <section class="card" id="fallback-card" style="display:none; border-color:var(--amber);">
+      <h2 style="margin-top:0; color:var(--amber-text);">⚠️ 语音服务暂不可用</h2>
+      <p id="fallback-reason" style="color:var(--ink-soft);"></p>
       <div style="display:flex; gap:8px;">
         <input id="text-input" placeholder="文字输入（语音不可用时直接与康伴对话）"
-               style="flex:1; font-size:18px; padding:10px; border:1px solid #ccc; border-radius:8px;" />
+               style="flex:1; font-size:18px; padding:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px;" />
         <button class="btn btn-ghost" id="btn-text-send">发送</button>
       </div>
       <div class="voice-log" id="log-text" style="margin-top:8px;">—</div>
     </section>
 
-    <p style="color:#999; font-size:14px; margin-top:16px;">
+    <p style="color:var(--ink-faint); font-size:14px; margin-top:16px;">
       提示：音频经 WebRTC 通道上传（需先连接语音）；转写与朗读延迟会记入日志用于 POC 统计。
     </p>
   </main>
