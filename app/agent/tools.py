@@ -9,13 +9,26 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.mcp_client import McpHost, McpToolInfo, get_mcp_host
+from app.core.logging import get_logger
+from app.db.session import get_session_factory
+from app.graphs.medication import submit_reply
 from app.router.executor import time_reply
+from app.router.signals import detect_medication_reply
+from app.services import medication_order as order_service
 from app.services.hitl import hitl_queue
+from app.services.medication_plan import (
+    format_plan_reply,
+    pick_current_slot,
+    today_plans,
+)
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -121,6 +134,29 @@ def _notify_parameters() -> dict[str, Any]:
     }
 
 
+def _medication_confirm_parameters() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "reply": {
+                "type": "string",
+                "description": "长者对服药提醒的原话，如「吃过了」「还没吃」「等会儿吃」",
+            },
+        },
+        "required": [],
+    }
+
+
+def _elder_uuid(ctx: ToolContext) -> uuid.UUID | None:
+    """只认服务端 Runtime Context；模型传入的 elder_id 一律忽略。"""
+    if not ctx.elder_id:
+        return None
+    try:
+        return uuid.UUID(str(ctx.elder_id))
+    except (TypeError, ValueError):
+        return None
+
+
 def _mcp_parameters(schema: Any) -> dict[str, Any]:
     """MCP 入参 Schema 兜底：非 dict 或为空时给空对象 Schema。"""
     if isinstance(schema, dict) and schema:
@@ -187,12 +223,94 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
         return ToolResult(ok=True, content=time_reply())
 
     async def medication_query(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
-        # Day7 接真实用药计划；当前明确告知尚未接入，绝不编造药名/剂量
-        return ToolResult(
-            ok=False,
-            content="用药计划还没接入，我先帮您记着，等护士站确认后再提醒您。",
-            degraded="medication_not_configured",
-        )
+        """查今天真实用药计划；无计划明确说明，绝不编造药名/剂量。"""
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您看用药计划。",
+                degraded="missing_elder_context",
+            )
+        try:
+            async with get_session_factory()() as session:
+                slots = await today_plans(session, elder_id=elder_id)
+        except Exception as exc:  # noqa: BLE001 —— 查询失败不向长者抛异常
+            logger.warning(
+                "今日用药查询失败",
+                extra={
+                    "event": "medication_query_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="用药计划暂时查不到，我先帮您记着，等会儿再试试。",
+                degraded=f"medication_query_error:{type(exc).__name__}",
+            )
+        if not slots:
+            return ToolResult(
+                ok=False,
+                content="今天还没有登记用药计划，等医生确认后我再提醒您。",
+                degraded="medication_not_configured",
+            )
+        return ToolResult(ok=True, content=format_plan_reply(slots))
+
+    async def medication_confirm(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """推进用药确认图；DB 会话短生命周期，异常不穿透语音链路。"""
+        reply = str(args.get("reply") or "")
+        if detect_medication_reply(reply) is None:
+            return ToolResult(
+                ok=True,
+                content="您是已经吃过药了，还是还没吃？",
+                degraded="medication_reply_unclear",
+            )
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您记吃药的事。",
+                degraded="missing_elder_context",
+            )
+
+        try:
+            async with get_session_factory()() as session:
+                slots = await today_plans(session, elder_id=elder_id)
+                slot = pick_current_slot(slots)
+                if slot is None:
+                    return ToolResult(
+                        ok=False,
+                        content="今天还没有登记用药计划，我先帮您记着。",
+                        degraded="medication_not_configured",
+                    )
+                order, _ = await order_service.ensure_order(
+                    session,
+                    plan=slot.plan,
+                    scheduled_at=slot.scheduled_at,
+                    created_source="text",
+                )
+                await session.commit()
+                result = await submit_reply(
+                    order.order_id,
+                    reply,
+                    source="text",
+                    device_id=ctx.device_id,
+                )
+        except Exception as exc:  # noqa: BLE001 —— 图/库异常只做可见降级
+            logger.warning(
+                "服药确认推进失败",
+                extra={
+                    "event": "medication_confirm_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="这次吃药我先没记上，等会儿再跟我说一声。",
+                degraded=f"medication_confirm_error:{type(exc).__name__}",
+            )
+        return ToolResult(ok=True, content=result.reply, degraded=result.degraded)
 
     async def media_play(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
         genre = str(args.get("genre") or "戏曲")
@@ -240,6 +358,14 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
             "查询今天的用药计划与服药确认",
             _empty_parameters(),
             medication_query,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "medication_confirm",
+            "记录长者对服药提醒的回复（吃过了/还没吃/等会儿吃）",
+            _medication_confirm_parameters(),
+            medication_confirm,
         )
     )
     registry.register(

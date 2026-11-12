@@ -1,6 +1,6 @@
-{"id": "gh-med-01", "text": "我把药吃了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "把字句+完成体"}
-{"id": "gh-med-02", "text": "药吃完了", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "宾语前置"}
-{"id": "gh-med-03", "text": "药还没服", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "否定+服药"}
+{"id": "gh-med-01", "text": "我把药吃了", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "把字句+完成体（Day7 段3：确认服药）"}
+{"id": "gh-med-02", "text": "药吃完了", "category": "语序/用药", "expect": {"tool": "medication_confirm"}, "note": "宾语前置（Day7 段3：确认服药）"}
+{"id": "gh-med-03", "text": "药还没服", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "否定+服药（Day7 段3：否认服药）"}
 {"id": "gh-med-04", "text": "该吃降压药了", "category": "同义/用药", "expect": {"tool": "medication_query"}, "note": "该吃了"}
 {"id": "gh-med-05", "text": "药什么时候吃", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "疑问语序"}
 {"id": "gh-ctrl-01", "text": "声音小一点儿", "category": "夹字/控制", "expect": {"action": "volume_down"}, "note": "小一点儿"}
@@ -32,7 +32,7 @@
 {"id": "gh2-med-01", "text": "药快吃完了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "快+吃完"}
 {"id": "gh2-med-02", "text": "药片吃完了", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "药片+完成体"}
 {"id": "gh2-med-03", "text": "降压药吃了吗", "category": "同义/用药", "expect": {"tool": "medication_query"}, "note": "药名+确认"}
-{"id": "gh2-med-04", "text": "降糖药还没吃", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "未服"}
+{"id": "gh2-med-04", "text": "降糖药还没吃", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "未服（Day7 段3：否认服药）"}
 {"id": "gh2-med-05", "text": "饭后的药吃了吗", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "时间状语+疑问"}
 {"id": "gh2-med-06", "text": "我不吃药了", "category": "否定", "expect": {"layer": "agent", "tool": null, "multi_intent": false}, "note": "拒绝服药不得查计划"}
 {"id": "gh2-med-07", "text": "不想再吃药了", "category": "否定", "expect": {"layer": "agent", "tool": null}, "note": "拒绝服药+再"}

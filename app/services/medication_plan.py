@@ -4,19 +4,31 @@
 - 计划 CRUD（仅绑定医生可写）与状态机；
 - 确认后创建长期用药工单，并把计划与工单双向关联；
 - 修改生效中的计划时写 revised 事件（原值→新值），供家属修改记录；
-- 家属只读列表与修改记录（字段白名单，internal_note 整条不出）。
+- 家属只读列表与修改记录（字段白名单，internal_note 整条不出）；
+- 今日用药查询与口语化话术（Day7 段3，供 Agent 工具与用药确认图使用）。
+
+``schedule`` JSON 约定（写入口已在 Pydantic Schema 校验）::
+
+    {"times": ["08:00", "20:00"], "weekdays": [0, 1, 2, 3, 4, 5, 6]}
+
+``weekdays`` 0=周一、6=周日；缺省或空数组表示每天。本模块按应用时区
+（``Settings.app_timezone``）解释 ``times``，落库的 ``scheduled_at`` 统一转 UTC。
 
 所有函数只写库/返回 ORM 对象，不自行推送 WS；推送由调用方在 commit 之后完成。
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from datetime import time as dt_time
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import UserIdentity
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models import Elder, MedicationPlan, Workorder, WorkorderEvent
 from app.models.enums import AccountRole, MedicationPlanStatus
@@ -527,3 +539,118 @@ def family_view(plan: MedicationPlan) -> dict[str, Any]:
         "created_at": plan.created_at,
         "updated_at": plan.updated_at,
     }
+
+
+# ---------------- Day7 段3：今日用药与口语化话术 ----------------
+
+
+@dataclass(frozen=True)
+class MedicationSlot:
+    """一个生效计划在今天的一个用药时段。"""
+
+    plan: MedicationPlan
+    scheduled_at: datetime  # 已转 UTC 的时段起点
+
+
+def _app_timezone() -> ZoneInfo:
+    return ZoneInfo(get_settings().app_timezone)
+
+
+def schedule_times(plan: MedicationPlan) -> list[dt_time]:
+    """解析 schedule.times；脏数据跳过，不抛异常。"""
+    raw = plan.schedule if isinstance(plan.schedule, dict) else {}
+    items = raw.get("times")
+    parsed: set[dt_time] = set()
+    for item in items or []:
+        try:
+            hour, minute = str(item).split(":", 1)
+            parsed.add(dt_time(int(hour), int(minute)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(parsed)
+
+
+def schedule_weekdays(plan: MedicationPlan) -> set[int] | None:
+    """解析 schedule.weekdays；缺省/空数组返回 None（每天）。"""
+    raw = plan.schedule if isinstance(plan.schedule, dict) else {}
+    items = raw.get("weekdays")
+    if not items:
+        return None
+    weekdays: set[int] = set()
+    for item in items:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 6:
+            weekdays.add(value)
+    return weekdays or None
+
+
+async def list_active_plans(
+    session: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    on_date: date | None = None,
+) -> list[MedicationPlan]:
+    """生效中的计划；指定日期时同时过滤 start_date/end_date。"""
+    stmt = select(MedicationPlan).where(
+        MedicationPlan.elder_id == elder_id,
+        MedicationPlan.status == MedicationPlanStatus.ACTIVE,
+    )
+    if on_date is not None:
+        stmt = stmt.where(
+            MedicationPlan.start_date <= on_date,
+            or_(MedicationPlan.end_date.is_(None), MedicationPlan.end_date >= on_date),
+        )
+    stmt = stmt.order_by(MedicationPlan.created_at.asc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def today_plans(
+    session: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    now: datetime | None = None,
+) -> list[MedicationSlot]:
+    """今天全部用药时段（按时段升序）；无计划返回空列表，绝不编造。"""
+    local_now = (now or datetime.now(UTC)).astimezone(_app_timezone())
+    plans = await list_active_plans(session, elder_id=elder_id, on_date=local_now.date())
+    slots: list[MedicationSlot] = []
+    for plan in plans:
+        weekdays = schedule_weekdays(plan)
+        if weekdays is not None and local_now.weekday() not in weekdays:
+            continue
+        for moment in schedule_times(plan):
+            local_dt = datetime.combine(local_now.date(), moment, tzinfo=local_now.tzinfo)
+            slots.append(
+                MedicationSlot(plan=plan, scheduled_at=local_dt.astimezone(UTC))
+            )
+    slots.sort(key=lambda slot: slot.scheduled_at)
+    return slots
+
+
+def pick_current_slot(
+    slots: list[MedicationSlot], *, now: datetime | None = None
+) -> MedicationSlot | None:
+    """当前时段：取最近一个已到点的时段；都未到点取第一个。"""
+    if not slots:
+        return None
+    reference = (now or datetime.now(UTC)).astimezone(UTC)
+    passed = [slot for slot in slots if slot.scheduled_at <= reference]
+    return passed[-1] if passed else slots[0]
+
+
+def format_plan_reply(slots: list[MedicationSlot]) -> str:
+    """今日用药口语化话术：只读库中字段，不补药名、不猜剂量。"""
+    if not slots:
+        return "今天还没有登记用药计划，等医生确认后我再提醒您。"
+    zone = _app_timezone()
+    parts: list[str] = []
+    for slot in slots:
+        local = slot.scheduled_at.astimezone(zone)
+        parts.append(
+            f"{local.hour:02d}点{local.minute:02d}分 {slot.plan.drug_name}，{slot.plan.dose}"
+        )
+    return "今天要吃的药是：" + "；".join(parts) + "。吃完跟我说一声。"
+

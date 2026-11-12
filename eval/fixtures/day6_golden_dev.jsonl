@@ -1,7 +1,7 @@
-{"id": "gd-med-01", "text": "把药吃了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "动作+补语夹字"}
-{"id": "gd-med-02", "text": "我吃过药了", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "完成体"}
-{"id": "gd-med-03", "text": "药还没吃", "category": "夹字/用药", "expect": {"tool": "medication_query"}, "note": "否定+省略"}
-{"id": "gd-med-04", "text": "药吃了", "category": "语序/用药", "expect": {"tool": "medication_query"}, "note": "宾语前置"}
+{"id": "gd-med-01", "text": "把药吃了", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "动作+补语夹字（Day7 段3：确认服药）"}
+{"id": "gd-med-02", "text": "我吃过药了", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "完成体（Day7 段3：确认服药）"}
+{"id": "gd-med-03", "text": "药还没吃", "category": "夹字/用药", "expect": {"tool": "medication_confirm"}, "note": "否定+省略（Day7 段3：否认服药）"}
+{"id": "gd-med-04", "text": "药吃了", "category": "语序/用药", "expect": {"tool": "medication_confirm"}, "note": "宾语前置（Day7 段3：确认服药）"}
 {"id": "gd-med-05", "text": "吃完药再告诉我儿子", "category": "多意图/用药", "expect": {"multi_intent": true}, "note": "用药+通知"}
 {"id": "gd-ctrl-01", "text": "声音弄小一点儿", "category": "夹字/控制", "expect": {"action": "volume_down"}, "note": "弄小"}
 {"id": "gd-ctrl-02", "text": "关小点", "category": "同义/控制", "expect": {"action": "volume_down"}, "note": "关小"}

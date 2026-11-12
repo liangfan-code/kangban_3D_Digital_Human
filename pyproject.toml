@@ -23,6 +23,9 @@ dependencies = [
     "mcp>=1.9,<3",
     "httpx>=0.28",
     "laya>=0.4.30",
+    "langgraph>=0.6",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]

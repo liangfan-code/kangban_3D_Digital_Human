@@ -22,6 +22,7 @@ from app.router.safety import match_sensitive
 from app.router.schemas import ClassifierResult, Intent, RouteDecision, RouteLayer
 from app.router.signals import (
     detect_media_control,
+    detect_medication_reply,
     is_deferred_play_command,
     is_denied_media_command,
     is_followup_question,
@@ -160,6 +161,18 @@ def route_text(
             intent=Intent.OTHER,
             escalated_to_agent=True,
             multi_intent=True,
+        )
+
+    # 服药确认/否认/延后（「我吃过药了」「还没吃」「等会儿吃」）必须早于规则层与
+    # 分类器：否则「我吃过药了」会被当成查询计划重复念一遍药单。放在多意图之后，
+    # 「吃完药再告诉我儿子」仍按多意图交给主控逐项处理。
+    if detect_medication_reply(text) is not None:
+        return RouteDecision(
+            layer=RouteLayer.RULE,
+            intent=Intent.MEDICATION_QUERY,
+            rule_id="MED-01",
+            tool="medication_confirm",
+            tool_args={"reply": text},
         )
 
     # 单意图的通知家属也必须进 Agent：notify_family 是高危 Tool，只能由主控

@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
 
+import app.agent.tools as tools_module
+import app.graphs.medication as graph_module
 from app.agent.mcp_client import McpCallResult, McpToolInfo
 from app.agent.tools import ToolContext, build_default_registry
+from app.core.config import get_settings
+from app.models import MedicationEvent, MedicationOrder, MedicationPlan
+from app.models.enums import MedicationOrderStatus
 from app.services.hitl import hitl_queue
 
 _WEATHER_TOOL = McpToolInfo(
@@ -38,6 +47,36 @@ class FakeHost:
             return McpCallResult(False, "天气服务暂时不可用。", 3, "boom", "weather")
         city = str(args.get("city") or "本地")
         return McpCallResult(True, f"{city}今天晴，18 到 25 度。", 3, None, "weather")
+
+
+def _session_factory(db_session):
+    @asynccontextmanager
+    async def factory():
+        yield db_session
+
+    return factory
+
+
+def _patch_tool_session(monkeypatch, db_session) -> None:
+    """Tool 与图内默认会话都指向测试事务，避免触达开发库。"""
+    factory = _session_factory(db_session)
+    monkeypatch.setattr(tools_module, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(graph_module, "get_session_factory", lambda: factory)
+
+
+async def _add_active_plan(db_session, elder_id, *, drug_name="降压药") -> MedicationPlan:
+    today = datetime.now(ZoneInfo(get_settings().app_timezone)).date()
+    plan = MedicationPlan(
+        elder_id=elder_id,
+        drug_name=drug_name,
+        dose="1 片",
+        schedule={"times": ["00:00"], "weekdays": []},
+        start_date=today,
+        status="active",
+    )
+    db_session.add(plan)
+    await db_session.flush()
+    return plan
 
 
 @pytest.fixture(autouse=True)
@@ -103,12 +142,90 @@ async def test_empty_snapshot_weather_is_degraded_not_unknown_tool():
     assert result.mcp_server is None
 
 
-async def test_medication_stub_never_fabricates():
+async def test_medication_query_without_context_never_fabricates():
     registry = build_default_registry(mcp_host=FakeHost())
     result = await registry.call("medication_query", {}, ToolContext())
     assert result.ok is False
-    assert result.degraded == "medication_not_configured"
+    assert result.degraded == "missing_elder_context"
     assert "药名" not in result.content
+
+
+async def test_medication_query_returns_real_plan(db_session, seed, monkeypatch):
+    await _add_active_plan(db_session, seed["elders"]["d1"].elder_id)
+    _patch_tool_session(monkeypatch, db_session)
+    registry = build_default_registry(mcp_host=FakeHost())
+
+    result = await registry.call(
+        "medication_query", {}, ToolContext(elder_id=str(seed["elders"]["d1"].elder_id))
+    )
+
+    assert result.ok is True
+    assert "降压药" in result.content
+    assert "1 片" in result.content
+
+
+async def test_medication_query_without_plan_is_explicit(db_session, seed, monkeypatch):
+    _patch_tool_session(monkeypatch, db_session)
+    registry = build_default_registry(mcp_host=FakeHost())
+
+    result = await registry.call(
+        "medication_query", {}, ToolContext(elder_id=str(seed["elders"]["d2"].elder_id))
+    )
+
+    assert result.ok is False
+    assert result.degraded == "medication_not_configured"
+    assert "还没有登记用药计划" in result.content
+
+
+async def test_medication_confirm_records_order_and_event(db_session, seed, monkeypatch):
+    plan = await _add_active_plan(db_session, seed["elders"]["d1"].elder_id)
+    _patch_tool_session(monkeypatch, db_session)
+    registry = build_default_registry(mcp_host=FakeHost())
+
+    result = await registry.call(
+        "medication_confirm",
+        {"reply": "我吃过了", "elder_id": str(seed["elders"]["d2"].elder_id)},
+        ToolContext(elder_id=str(seed["elders"]["d1"].elder_id)),
+    )
+
+    assert result.ok is True
+    order = (
+        await db_session.execute(
+            select(MedicationOrder).where(MedicationOrder.plan_id == plan.plan_id)
+        )
+    ).scalars().one()
+    assert order.elder_id == seed["elders"]["d1"].elder_id
+    assert order.status == MedicationOrderStatus.CONFIRMED
+    event_types = (
+        await db_session.execute(
+            select(MedicationEvent.event_type).where(
+                MedicationEvent.order_id == order.order_id
+            )
+        )
+    ).scalars().all()
+    assert event_types.count("confirmed") == 1
+
+
+async def test_medication_confirm_degraded_still_records(db_session, seed, monkeypatch):
+    plan = await _add_active_plan(db_session, seed["elders"]["d1"].elder_id)
+    _patch_tool_session(monkeypatch, db_session)
+    monkeypatch.setattr(graph_module, "LANGGRAPH_AVAILABLE", False)
+    registry = build_default_registry(mcp_host=FakeHost())
+
+    result = await registry.call(
+        "medication_confirm",
+        {"reply": "吃过了"},
+        ToolContext(elder_id=str(seed["elders"]["d1"].elder_id)),
+    )
+
+    assert result.ok is True
+    assert result.degraded == "medication_graph_unavailable"
+    order = (
+        await db_session.execute(
+            select(MedicationOrder).where(MedicationOrder.plan_id == plan.plan_id)
+        )
+    ).scalars().one()
+    assert order.status == MedicationOrderStatus.CONFIRMED
 
 
 async def test_media_play_emits_control_event():

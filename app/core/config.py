@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     mcp_config_path: str | None = None
     mcp_default_call_timeout_seconds: float = 8.0
 
+    # ---- Day7 用药确认图（Optional）----
+    # LangGraph SQLite checkpointer 路径；为空时用 logs/checkpoints/medication.sqlite3
+    medication_checkpoint_path: str | None = None
+
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None
     webrtc_turn_servers: str | None = None
