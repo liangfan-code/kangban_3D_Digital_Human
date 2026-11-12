@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -15,9 +16,21 @@ import app.graphs.medication as graph_module
 from app.agent.mcp_client import McpCallResult, McpToolInfo
 from app.agent.tools import ToolContext, build_default_registry
 from app.core.config import get_settings
-from app.models import MedicationEvent, MedicationOrder, MedicationPlan
-from app.models.enums import MedicationOrderStatus
+from app.models import (
+    MediaHistory,
+    MediaLibrary,
+    MedicationEvent,
+    MedicationOrder,
+    MedicationPlan,
+)
+from app.models.enums import (
+    MediaCopyrightStatus,
+    MediaStatus,
+    MediaType,
+    MedicationOrderStatus,
+)
 from app.services.hitl import hitl_queue
+from app.services.session_state import SessionStateStore
 
 _WEATHER_TOOL = McpToolInfo(
     server_id="weather",
@@ -228,12 +241,104 @@ async def test_medication_confirm_degraded_still_records(db_session, seed, monke
     assert order.status == MedicationOrderStatus.CONFIRMED
 
 
-async def test_media_play_emits_control_event():
+async def _add_active_media(db_session, *, title: str = "越剧测试") -> MediaLibrary:
+    media = MediaLibrary(
+        title=title,
+        type=MediaType.OPERA,
+        genre="越剧",
+        artist="测试",
+        media_uri="/static/media/library/test.wav",
+        duration_seconds=8,
+        copyright_status=MediaCopyrightStatus.LICENSED,
+        status=MediaStatus.ACTIVE,
+    )
+    db_session.add(media)
+    await db_session.flush()
+    return media
+
+
+async def test_media_play_without_elder_degrades():
     registry = build_default_registry(mcp_host=FakeHost())
     result = await registry.call("media_play", {"genre": "越剧"}, ToolContext())
-    assert result.client_events == [
-        {"type": "control", "action": "media_play", "genre": "越剧"}
-    ]
+    assert result.ok is False
+    assert result.degraded == "missing_elder_context"
+
+
+async def test_media_play_emits_control_event_and_history(
+    db_session, seed, monkeypatch
+):
+    _patch_tool_session(monkeypatch, db_session)
+    store = SessionStateStore(force_memory=True)
+    monkeypatch.setattr(tools_module, "get_session_store", lambda: store)
+    await _add_active_media(db_session)
+
+    registry = build_default_registry(mcp_host=FakeHost())
+    ctx = ToolContext(
+        elder_id=str(seed["elders"]["single"].elder_id),
+        device_id="device-1",
+        thread_id="thread-media-play",
+    )
+    result = await registry.call("media_play", {"genre": "越剧"}, ctx)
+
+    assert result.ok is True
+    event = result.client_events[0]
+    assert event["type"] == "control"
+    assert event["action"] == "media_play"
+    assert event["genre"] == "越剧"
+    assert event["url"] == "/static/media/library/test.wav"
+    assert event["history_id"]
+
+    row = (
+        await db_session.execute(
+            select(MediaHistory).where(
+                MediaHistory.history_id == uuid.UUID(event["history_id"])
+            )
+        )
+    ).scalars().one()
+    assert row.finished_at is None
+
+
+async def test_media_stop_closes_history(db_session, seed, monkeypatch):
+    _patch_tool_session(monkeypatch, db_session)
+    store = SessionStateStore(force_memory=True)
+    monkeypatch.setattr(tools_module, "get_session_store", lambda: store)
+    await _add_active_media(db_session)
+
+    registry = build_default_registry(mcp_host=FakeHost())
+    ctx = ToolContext(
+        elder_id=str(seed["elders"]["single"].elder_id),
+        device_id="device-1",
+        thread_id="thread-media-stop",
+    )
+    played = await registry.call("media_play", {"genre": "越剧"}, ctx)
+    history_id = uuid.UUID(played.client_events[0]["history_id"])
+
+    stopped = await registry.call("media_stop", {"elapsed_seconds": 3}, ctx)
+
+    assert stopped.ok is True
+    assert stopped.client_events == [{"type": "control", "action": "stop"}]
+    row = (
+        await db_session.execute(
+            select(MediaHistory).where(MediaHistory.history_id == history_id)
+        )
+    ).scalars().one()
+    assert row.finished_at is not None
+
+
+async def test_media_play_without_library_degrades(db_session, seed, monkeypatch):
+    _patch_tool_session(monkeypatch, db_session)
+    store = SessionStateStore(force_memory=True)
+    monkeypatch.setattr(tools_module, "get_session_store", lambda: store)
+    registry = build_default_registry(mcp_host=FakeHost())
+    ctx = ToolContext(
+        elder_id=str(seed["elders"]["single"].elder_id),
+        thread_id="thread-media-empty",
+    )
+
+    result = await registry.call("media_play", {"genre": "越剧"}, ctx)
+
+    assert result.ok is False
+    assert result.degraded == "media_unavailable"
 
 
 async def test_notify_family_goes_to_hitl_not_direct_send():

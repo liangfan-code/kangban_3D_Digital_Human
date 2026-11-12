@@ -597,7 +597,9 @@ async def generate_text_reply(
     _apply_route_trace(trace, decision)
     trace.set_meta("llm_called", "false")
     tool_ctx = ToolContext(
-        elder_id=str(elder_id) if elder_id else None, device_id=str(device_id)
+        elder_id=str(elder_id) if elder_id else None,
+        device_id=str(device_id),
+        thread_id=str(thread_id) if thread_id else None,
     )
 
     reply: str | None = None
@@ -1445,6 +1447,7 @@ class VoiceSession:
         tool_ctx = ToolContext(
             elder_id=str(self.verified_elder_id) if self.verified_elder_id else None,
             device_id=str(self.device_id),
+            thread_id=str(thread_id) if thread_id else None,
         )
 
         if decision.layer is RouteLayer.SAFETY:

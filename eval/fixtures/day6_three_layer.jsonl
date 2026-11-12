@@ -1,8 +1,8 @@
-{"id": "rule-01", "text": "换一段", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": null, "expected_action": "media_next", "note": "R01 换一段"}
-{"id": "rule-02", "text": "下一首", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": null, "expected_action": "media_next", "note": "R01 同义变体"}
+{"id": "rule-01", "text": "换一段", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": "media_next", "expected_action": "media_next", "note": "R01 换一段（Day7 段6 接真实媒体工具）"}
+{"id": "rule-02", "text": "下一首", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R01", "expected_tool": "media_next", "expected_action": "media_next", "note": "R01 同义变体（Day7 段6 接真实媒体工具）"}
 {"id": "rule-03", "text": "大声点", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R02", "expected_tool": null, "expected_action": "volume_up", "note": "R02 大声点"}
 {"id": "rule-04", "text": "小声点", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R03", "expected_tool": null, "expected_action": "volume_down", "note": "R03 小声点"}
-{"id": "rule-05", "text": "停", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R04", "expected_tool": null, "expected_action": "media_stop", "note": "R04 停"}
+{"id": "rule-05", "text": "停", "expected_layer": "rule", "expected_intent": "media_control", "expected_rule_id": "R04", "expected_tool": "media_stop", "expected_action": "media_stop", "note": "R04 停（Day7 段6 接真实媒体工具）"}
 {"id": "rule-06", "text": "我想听越剧", "expected_layer": "rule", "expected_intent": "media_play", "expected_rule_id": "R05", "expected_tool": "media_play", "expected_action": "media_play", "note": "R05 戏曲点播（P1 起同时携带 Tool，供评测/Agent 复用）"}
 {"id": "rule-07", "text": "放一首京剧", "expected_layer": "rule", "expected_intent": "media_play", "expected_rule_id": "R05", "expected_tool": "media_play", "expected_action": "media_play", "note": "R05 同义变体"}
 {"id": "rule-08", "text": "几点了", "expected_layer": "rule", "expected_intent": "other", "expected_rule_id": "R06", "expected_tool": null, "expected_action": "time_query", "note": "R06 时间"}

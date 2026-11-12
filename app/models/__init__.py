@@ -18,6 +18,7 @@ from app.models.health_profile import (
     HealthSummary,
 )
 from app.models.media import MediaLibrary
+from app.models.media_history import MediaHistory
 from app.models.medication import MedicationPlan
 from app.models.medication_order import MedicationEvent, MedicationOrder
 from app.models.memory import MemoryChunk
@@ -42,6 +43,7 @@ __all__ = [
     "HealthGrant",
     "HealthRecord",
     "HealthSummary",
+    "MediaHistory",
     "MediaLibrary",
     "MedicationEvent",
     "MedicationOrder",

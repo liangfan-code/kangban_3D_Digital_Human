@@ -45,25 +45,21 @@ def time_reply() -> str:
 
 
 def execute_rule(decision: RouteDecision) -> RuleOutcome | None:
-    """执行本地确定性动作；Tool 类动作与「重复一遍」返回 None 交由上层处理。"""
+    """执行本地确定性动作；带 Tool 的动作一律让位给工具层（Day7 段6）。
+
+    media_play / media_next / media_stop 需查库选片并落 media_history，因此由
+    ``decision.tool`` 非空直接返回 None，交由上层调用真实 Tool。
+    """
+    if decision.tool:
+        return None
     action = decision.action
-    if action == "media_next":
-        return RuleOutcome("好，给您换一段。", ({"type": "control", "action": "media_next"},))
     if action == "volume_up":
         return RuleOutcome("好，我大声一点。", ({"type": "control", "action": "volume_up"},))
     if action == "volume_down":
         return RuleOutcome("好，我小声一点。", ({"type": "control", "action": "volume_down"},))
-    if action == "media_stop":
-        return RuleOutcome("好，我停下了。", ({"type": "control", "action": "stop"},))
     if action == "media_defer":
         # 「先别放，等我吃完药」：不立即播，也不当成停止指令，只说先等着
         return RuleOutcome("好，那我先不放了，等您忙完再说。")
-    if action == "media_play":
-        genre = decision.tool_args.get("genre") or "戏曲"
-        return RuleOutcome(
-            f"好，给您放一段{genre}。",
-            ({"type": "control", "action": "media_play", "genre": genre},),
-        )
     if action == "time_query":
         return RuleOutcome(time_reply())
     if action == "farewell":

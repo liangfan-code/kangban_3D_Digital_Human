@@ -20,6 +20,7 @@ from app.db.session import get_session_factory
 from app.graphs.medication import submit_reply
 from app.router.executor import time_reply
 from app.router.signals import detect_medication_reply
+from app.services import media as media_service
 from app.services import medication_order as order_service
 from app.services import memory as memory_service
 from app.services.hitl import hitl_queue
@@ -28,6 +29,7 @@ from app.services.medication_plan import (
     pick_current_slot,
     today_plans,
 )
+from app.services.session_state import get_session_store
 
 logger = get_logger(__name__)
 
@@ -39,6 +41,8 @@ class ToolContext:
     elder_id: str | None = None
     device_id: str = ""
     room_type: str = "single"
+    # 会话线程：媒体槽位（当前在播/历史）按此读写；匿名或测试可为空
+    thread_id: str | None = None
 
 
 @dataclass
@@ -169,6 +173,88 @@ def _elder_uuid(ctx: ToolContext) -> uuid.UUID | None:
         return uuid.UUID(str(ctx.elder_id))
     except (TypeError, ValueError):
         return None
+
+
+def _elapsed_seconds(raw: Any) -> float | None:
+    """前端回传的已播时长：只接受 0–24h 的数字，其余按未知处理。"""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or value > 86_400:
+        return None
+    return value
+
+
+def _media_event(action: str, media: dict[str, Any], history_id: str | None) -> dict[str, Any]:
+    """统一下发给前端的点播控制事件（地址只允许服务端选出的相对路径）。"""
+    return {
+        "type": "control",
+        "action": action,
+        "media_id": media.get("media_id"),
+        "title": media.get("title"),
+        "genre": media.get("genre"),
+        "url": media.get("url"),
+        "duration_seconds": media.get("duration_seconds"),
+        "history_id": history_id,
+    }
+
+
+async def _load_media_slot(ctx: ToolContext) -> dict[str, Any]:
+    """读取当前会话在播信息；Redis/内存不可用时返回空（按「无当前」处理）。"""
+    if not ctx.thread_id:
+        return {}
+    try:
+        state = await get_session_store().load(ctx.thread_id)
+    except Exception as exc:  # noqa: BLE001 —— 槽位读失败不阻断点播
+        logger.warning(
+            "媒体槽位读取失败",
+            extra={"event": "media_slot_read_failed", "error_type": type(exc).__name__},
+        )
+        return {}
+    slot = state.slots.media
+    return {
+        "media_id": slot.media_id,
+        "title": slot.title,
+        "history_id": slot.history_id,
+        "genre": slot.genre,
+    }
+
+
+async def _remember_media(
+    ctx: ToolContext, media: dict[str, Any], history_id: str | None
+) -> None:
+    if not ctx.thread_id:
+        return
+    try:
+        async with get_session_store().mutate(ctx.thread_id) as state:
+            state.slots.media.action = "media_play"
+            state.slots.media.media_id = media.get("media_id")
+            state.slots.media.title = media.get("title")
+            state.slots.media.genre = media.get("genre")
+            state.slots.media.history_id = history_id
+    except Exception as exc:  # noqa: BLE001 —— 槽位写失败不影响已下发的播放事件
+        logger.warning(
+            "媒体槽位写入失败",
+            extra={"event": "media_slot_write_failed", "error_type": type(exc).__name__},
+        )
+
+
+async def _clear_media(ctx: ToolContext) -> None:
+    if not ctx.thread_id:
+        return
+    try:
+        async with get_session_store().mutate(ctx.thread_id) as state:
+            state.slots.media.action = "media_stop"
+            state.slots.media.media_id = None
+            state.slots.media.title = None
+            state.slots.media.history_id = None
+            state.slots.media.genre = None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "媒体槽位清理失败",
+            extra={"event": "media_slot_clear_failed", "error_type": type(exc).__name__},
+        )
 
 
 def _mcp_parameters(schema: Any) -> dict[str, Any]:
@@ -366,22 +452,138 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
         ]
         return ToolResult(ok=True, content="我记得：" + "；".join(snippets) + "。")
 
-    async def media_play(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
-        genre = str(args.get("genre") or "戏曲")
+    async def media_play(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """真实选片 + 落播放历史；无素材/无身份明确降级，不伪造歌名。"""
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您放戏。",
+                degraded="missing_elder_context",
+            )
+        genre = str(args.get("genre") or "").strip() or None
+        try:
+            async with get_session_factory()() as session:
+                media = await media_service.pick_for_play(session, elder_id, genre)
+                if media is None:
+                    return ToolResult(
+                        ok=False,
+                        content="这段暂时没有音源，我帮您记着，等会儿再试试。",
+                        degraded="media_unavailable",
+                    )
+                history_id = await media_service.record_start(session, elder_id, media)
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001 —— 媒体异常不穿透语音链路
+            logger.warning(
+                "媒体点播失败",
+                extra={
+                    "event": "media_play_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="这段暂时放不了，我帮您记着，等会儿再试试。",
+                degraded=f"media_error:{type(exc).__name__}",
+            )
+
+        await _remember_media(ctx, media, str(history_id))
+        label = media.get("genre") or "戏曲"
         return ToolResult(
             ok=True,
-            content=f"好，给您放一段{genre}。",
-            client_events=[{"type": "control", "action": "media_play", "genre": genre}],
+            content=f"好，给您放一段{label}《{media.get('title')}》。",
+            client_events=[_media_event("media_play", media, str(history_id))],
         )
 
-    async def media_next(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
+    async def media_next(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """按当前槽位切同品类下一条；旧记录按未完成补结束。"""
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您换一段。",
+                degraded="missing_elder_context",
+            )
+        current = await _load_media_slot(ctx)
+        fallback_genre = str(args.get("genre") or "").strip() or None
+        try:
+            async with get_session_factory()() as session:
+                if current.get("history_id"):
+                    await media_service.record_end(
+                        session, elder_id, current["history_id"], completed=False
+                    )
+                if current.get("media_id"):
+                    media = await media_service.next_for(
+                        session,
+                        elder_id,
+                        {
+                            "media_id": current["media_id"],
+                            "genre": current.get("genre") or fallback_genre,
+                        },
+                    )
+                else:
+                    media = await media_service.pick_for_play(
+                        session, elder_id, fallback_genre
+                    )
+                if media is None:
+                    await session.commit()
+                    return ToolResult(
+                        ok=False,
+                        content="没有别的段子了，我帮您记着，等会儿再换。",
+                        degraded="media_unavailable",
+                    )
+                history_id = await media_service.record_start(session, elder_id, media)
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "媒体换段失败",
+                extra={
+                    "event": "media_next_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="这段暂时换不了，我帮您记着，等会儿再试试。",
+                degraded=f"media_error:{type(exc).__name__}",
+            )
+
+        await _remember_media(ctx, media, str(history_id))
+        label = media.get("genre") or "戏曲"
         return ToolResult(
             ok=True,
-            content="好，给您换一段。",
-            client_events=[{"type": "control", "action": "media_next"}],
+            content=f"好，给您换一段{label}《{media.get('title')}》。",
+            client_events=[_media_event("media_next", media, str(history_id))],
         )
 
-    async def media_stop(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
+    async def media_stop(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """停止播放：有当前历史则按未完成补结束；无身份也允许停（不落库）。"""
+        current = await _load_media_slot(ctx)
+        history_id = current.get("history_id")
+        elder_id = _elder_uuid(ctx)
+        if elder_id is not None and history_id:
+            try:
+                async with get_session_factory()() as session:
+                    await media_service.record_end(
+                        session,
+                        elder_id,
+                        history_id,
+                        completed=False,
+                        elapsed_seconds=_elapsed_seconds(args.get("elapsed_seconds")),
+                    )
+                    await session.commit()
+            except Exception as exc:  # noqa: BLE001 —— 停止事件必须下发
+                logger.warning(
+                    "媒体停止落库失败",
+                    extra={
+                        "event": "media_stop_persist_failed",
+                        "elder_id": str(elder_id),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        await _clear_media(ctx)
         return ToolResult(
             ok=True,
             content="好，我停下了。",

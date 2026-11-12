@@ -120,21 +120,30 @@ def test_blank_text_escalates_to_agent():
     assert decision.escalated_to_agent is True
 
 
-def test_execute_media_stop_emits_control():
-    outcome = execute_rule(route_text("停"))
-    assert outcome is not None
-    assert outcome.reply == "好，我停下了。"
-    assert outcome.events == ({"type": "control", "action": "stop"},)
+def test_execute_media_actions_defer_to_tools():
+    """Day7 段6：点播/换段/停止都需查库选片与落库，规则层不再本地话术短路。"""
+    for text, tool in [
+        ("停", "media_stop"),
+        ("换一段", "media_next"),
+        ("我想听越剧", "media_play"),
+    ]:
+        decision = route_text(text)
+        assert decision.tool == tool
+        assert execute_rule(decision) is None
 
 
-def test_execute_volume_and_genre():
+def test_execute_volume_keeps_local_reply():
     up = execute_rule(route_text("大声点"))
     assert up is not None and up.events[0]["action"] == "volume_up"
 
-    play = execute_rule(route_text("我想听京剧"))
-    assert play is not None
-    assert play.events[0] == {"type": "control", "action": "media_play", "genre": "京剧"}
-    assert "京剧" in play.reply
+    down = execute_rule(route_text("声音小一点"))
+    assert down is not None and down.events[0]["action"] == "volume_down"
+
+
+def test_media_play_decision_carries_genre():
+    decision = route_text("我想听京剧")
+    assert decision.tool == "media_play"
+    assert decision.tool_args.get("genre") == "京剧"
 
 
 def test_execute_time_reply_shape():
@@ -143,7 +152,9 @@ def test_execute_time_reply_shape():
     assert re.match(r"^现在是(上午|下午)\d{1,2}点\d{2}分。$", outcome.reply)
 
 
-@pytest.mark.parametrize("text", ["今天天气怎么样", "我要吃药", "再说一遍"])
+@pytest.mark.parametrize(
+    "text", ["今天天气怎么样", "我要吃药", "再说一遍", "停", "换一段", "我想听越剧"]
+)
 def test_tool_and_context_actions_defer_to_upper_layer(text):
     assert execute_rule(route_text(text)) is None
 

@@ -32,6 +32,8 @@
   var avatarDest = null; // Day4 口型桥：TTS → MediaStreamDestination → 3D 数字人
   var currentSrc = null, gainNode = null, volumeGain = 1; // Day6.1：规则层 control 事件
   var callPc = null, callAudio = null; // Day7 段4：服务端主动外呼（下行 TTS）
+  // Day7 段6：媒体点播（<audio> 复用；history_id 用于回传结束事件）
+  var mediaAudio = null, mediaHistoryId = null, mediaUnlockBtn = null;
   var connected = false;
 
   function setStatus(text, cls) {
@@ -227,6 +229,83 @@
   }
 
   // ---------- 规则层 control 事件（Day6.1：停/音量/换段/点播）----------
+  function ensureMediaAudio() {
+    if (!mediaAudio) {
+      mediaAudio = new Audio();
+      mediaAudio.preload = "auto";
+      mediaAudio.volume = Math.min(1, 0.8 * volumeGain);
+      mediaAudio.addEventListener("ended", function () {
+        var hid = mediaHistoryId;
+        mediaHistoryId = null;
+        if (hid && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "media_event", action: "ended", history_id: hid }));
+        }
+        appendLog(logReply, "🎵 播放结束", "");
+      });
+    }
+    return mediaAudio;
+  }
+
+  /** 自动播放被拦截时的可见兜底：固定按钮，点击后重试，不静默失败。 */
+  function showMediaUnlock() {
+    if (!mediaUnlockBtn) {
+      mediaUnlockBtn = document.createElement("button");
+      mediaUnlockBtn.textContent = "▶ 点这里继续播放";
+      mediaUnlockBtn.className = "btn btn-primary";
+      mediaUnlockBtn.style.cssText =
+        "position:fixed;right:24px;bottom:24px;z-index:9999;padding:12px 20px;font-size:18px;";
+      mediaUnlockBtn.onclick = function () {
+        if (!mediaAudio) return;
+        var retry = mediaAudio.play();
+        if (retry && retry.then) {
+          retry.then(function () { hideMediaUnlock(); }).catch(function (err) {
+            appendLog(logReply, "[提示] 仍无法播放：" + err.message, "e");
+          });
+        }
+      };
+      document.body.appendChild(mediaUnlockBtn);
+    }
+    mediaUnlockBtn.style.display = "";
+  }
+  function hideMediaUnlock() {
+    if (mediaUnlockBtn) mediaUnlockBtn.style.display = "none";
+  }
+
+  function stopMedia() {
+    if (mediaAudio) {
+      if (mediaHistoryId && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "media_event", action: "stopped", history_id: mediaHistoryId,
+          elapsed_seconds: mediaAudio.currentTime || 0
+        }));
+      }
+      try { mediaAudio.pause(); } catch (e) { /* 已停止 */ }
+      mediaAudio.removeAttribute("src");
+      try { mediaAudio.load(); } catch (e) { /* 忽略 */ }
+    }
+    mediaHistoryId = null;
+    hideMediaUnlock();
+  }
+
+  function playMedia(ev) {
+    if (!ev.url) {
+      appendLog(logReply, "[提示] 这段没有可播放地址", "e");
+      return;
+    }
+    var audio = ensureMediaAudio();
+    mediaHistoryId = ev.history_id || null;
+    audio.volume = Math.min(1, 0.8 * volumeGain);
+    audio.src = ev.url;
+    appendLog(logReply, "🎵 正在播放：" + (ev.title || ev.genre || "媒体"), "");
+    var playing = audio.play();
+    if (playing && playing.catch) {
+      playing.catch(function (err) {
+        appendLog(logReply, "[提示] 浏览器拦截了自动播放：" + err.message, "e");
+        showMediaUnlock();
+      });
+    }
+  }
+
   function handleControl(ev) {
     var action = ev.action;
     if (action === "stop") {
@@ -238,21 +317,20 @@
       if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
       if (micStream) micStream.getAudioTracks().forEach(function (t) { t.enabled = true; });
       ttsPlaying = false;
+      stopMedia();
       appendLog(logReply, "⏹ 已停止播放", "");
       return;
     }
     if (action === "volume_up" || action === "volume_down") {
       volumeGain = Math.min(1.8, Math.max(0.3, volumeGain + (action === "volume_up" ? 0.2 : -0.2)));
       if (gainNode) gainNode.gain.value = volumeGain;
+      if (mediaAudio) mediaAudio.volume = Math.min(1, 0.8 * volumeGain);
       appendLog(logReply, "🔉 音量 " + Math.round(volumeGain * 100) + "%", "");
       return;
     }
-    if (action === "media_next") {
-      appendLog(logReply, "🎵 换一段（媒体播放 Day7 接入）", "");
-      return;
-    }
-    if (action === "media_play") {
-      appendLog(logReply, "🎵 点播：" + (ev.genre || "戏曲") + "（媒体播放 Day7 接入）", "");
+    if (action === "media_play" || action === "media_next") {
+      // 不操作麦克风轨：长者需要在播放中继续说「停/换一段」
+      playMedia(ev);
     }
   }
 

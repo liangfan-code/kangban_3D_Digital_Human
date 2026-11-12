@@ -1,0 +1,4 @@
+{
+  "_comment": "教师授权素材清单示例：把授权文件放进 app/static/media/library/ 后，按 items 内字段逐条填写。file 只能是该目录下的文件名（不含路径/URL）。",
+  "items": []
+}

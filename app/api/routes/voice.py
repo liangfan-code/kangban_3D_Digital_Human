@@ -38,6 +38,7 @@ from app.db.session import get_session, get_session_factory
 from app.integrations import ProviderUnavailable
 from app.models.enums import AccountRole, IdentitySource
 from app.realtime.session import outbound_call_registry
+from app.services import media as media_service
 from app.services.device import DeviceNotFound, device_self_view
 from app.services.voice import (
     BiometricDeviceMissing,
@@ -400,6 +401,63 @@ async def _handle_call_answer(event: dict, device_id: UUID) -> None:
         )
 
 
+async def _handle_media_event(
+    event: dict,
+    *,
+    allowed_elder_ids: set[UUID],
+    verified_elder_id: UUID | None,
+) -> None:
+    """前端播放结束/停止回执：校验归属后补 media_history，不触发 TTS。"""
+    action = str(event.get("action") or "")
+    history_id = event.get("history_id")
+    if action not in ("ended", "stopped") or not history_id:
+        logger.warning(
+            "忽略非法 media_event",
+            extra={"event": "media_event_invalid", "action": action},
+        )
+        return
+
+    elder_id = verified_elder_id if verified_elder_id in allowed_elder_ids else None
+    if elder_id is None and len(allowed_elder_ids) == 1:
+        elder_id = next(iter(allowed_elder_ids))
+    if elder_id is None:
+        logger.warning(
+            "media_event 无匹配长者，忽略",
+            extra={"event": "media_event_forbidden", "history_id": str(history_id)},
+        )
+        return
+
+    elapsed: float | None = None
+    raw = event.get("elapsed_seconds")
+    if raw is not None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = -1.0
+        if 0 <= value <= 86_400:
+            elapsed = value
+
+    try:
+        async with get_session_factory()() as db:
+            await media_service.record_end(
+                db,
+                elder_id,
+                history_id,
+                completed=action == "ended",
+                elapsed_seconds=elapsed,
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 —— 单条回执失败不得断开 WS
+        logger.warning(
+            "media_event 处理失败",
+            extra={
+                "event": "media_event_failed",
+                "elder_id": str(elder_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+
+
 @router.websocket("/voice/ws")
 async def voice_ws(ws: WebSocket, session: AsyncSession = Depends(get_session)) -> None:
     """语音事件通道：设备 Token 鉴权 → 会话状态机 → JSON 事件流。
@@ -423,6 +481,7 @@ async def voice_ws(ws: WebSocket, session: AsyncSession = Depends(get_session)) 
         return
 
     send_lock = asyncio.Lock()
+    allowed_elder_ids = {elder_id for elder_id, _ in candidates}
 
     async def send_event(event: dict) -> None:
         async with send_lock:
@@ -484,6 +543,12 @@ async def voice_ws(ws: WebSocket, session: AsyncSession = Depends(get_session)) 
                 )
             elif event.get("type") == "rtc_call_answer":
                 await _handle_call_answer(event, device_id)
+            elif event.get("type") == "media_event":
+                await _handle_media_event(
+                    event,
+                    allowed_elder_ids=allowed_elder_ids,
+                    verified_elder_id=voice_session.verified_elder_id,
+                )
             elif event.get("type") == "ping":
                 await send_event({"type": "pong"})
     except WebSocketDisconnect:

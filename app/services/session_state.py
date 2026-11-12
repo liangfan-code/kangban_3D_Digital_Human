@@ -36,6 +36,11 @@ class MediaSlot(BaseModel):
 
     action: str | None = None
     keyword: str | None = None
+    # Day7 段6：当前在播信息，供「换一段/停」补结束与续播；默认 None 兼容旧数据
+    media_id: str | None = None
+    title: str | None = None
+    history_id: str | None = None
+    genre: str | None = None
 
 
 class IdentitySlot(BaseModel):

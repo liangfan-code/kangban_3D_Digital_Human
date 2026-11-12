@@ -52,6 +52,7 @@ RULES: tuple[Rule, ...] = (
         ),
         Intent.MEDIA_CONTROL,
         "media_next",
+        tool="media_next",
     ),
     Rule(
         "R02",
@@ -89,6 +90,7 @@ RULES: tuple[Rule, ...] = (
         ),
         Intent.MEDIA_CONTROL,
         "media_stop",
+        tool="media_stop",
     ),
     Rule(
         "R05",
