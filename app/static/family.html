@@ -17,6 +17,8 @@
 
     <section class="mt-24" id="workorders"></section>
 
+    <section class="mt-24" id="family-medication"></section>
+
     <div class="grid grid-2 stagger" id="elder-cards"></div>
 
     <div class="grid grid-2 mt-24">
@@ -35,6 +37,7 @@
 
   <script src="/js/api.js"></script>
   <script src="/js/workorders.js"></script>
+  <script src="/js/medication.js"></script>
   <script>
     (function () {
       "use strict";
@@ -227,6 +230,9 @@
 
       load();
       KBWorkOrders.mount({ role: "family", rootId: "workorders" });
+      if (window.KBMedication) {
+        KBMedication.mountFamily({ rootId: "family-medication" });
+      }
     })();
   </script>
 </body>

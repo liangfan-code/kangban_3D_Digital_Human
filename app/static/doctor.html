@@ -26,11 +26,6 @@
         <span class="ph-note">后续版本</span>
       </div>
       <div class="placeholder-card">
-        <span class="ph-icon">💊</span>
-        <div>用药方案管理</div>
-        <span class="ph-note">后续版本 · 高危副作用需人工确认（HITL）</span>
-      </div>
-      <div class="placeholder-card">
         <span class="ph-icon">📤</span>
         <div>摘要自动同步家属</div>
         <span class="ph-note">家属端生成后即可见并回执已阅</span>
@@ -40,6 +35,7 @@
 
   <script src="/js/api.js"></script>
   <script src="/js/workorders.js"></script>
+  <script src="/js/medication.js"></script>
   <script>
     (function () {
       "use strict";
@@ -88,12 +84,21 @@
               "<div class='card-title'><h3>" + KB.esc(e.name) + "</h3>" + statusTag(e.status) + "</div>" +
               "<div class='muted'>性别：" + (e.gender === "female" ? "女" : e.gender === "male" ? "男" : "—") +
               " · " + (e.bed_no ? "床位 " + e.bed_no : "床位未分配") + "</div>" +
-              "<div class='faint mt-8'>点击打开健康档案（查看 / 编辑 / 摘要 / 导出）</div></div>";
+              "<div class='faint mt-8'>点击打开健康档案（查看 / 编辑 / 摘要 / 导出）</div>" +
+              "<div class='mt-8'><button class='btn btn-ghost btn-sm' data-medication='" +
+              e.elder_id + "'>用药计划</button></div></div>";
           }).join("");
           box.querySelectorAll("[data-id]").forEach(function (card) {
             card.addEventListener("click", function () {
               var e = rows.find(function (x) { return x.elder_id === card.dataset.id; });
               openHealth(e);
+            });
+          });
+          box.querySelectorAll("[data-medication]").forEach(function (btn) {
+            btn.addEventListener("click", function (ev) {
+              ev.stopPropagation();
+              var e = rows.find(function (x) { return x.elder_id === btn.dataset.medication; });
+              if (e) KBMedication.openDoctorPlans(e);
             });
           });
         }).catch(function (e) {

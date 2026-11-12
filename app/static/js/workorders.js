@@ -24,12 +24,19 @@
   var PRIORITY_LABEL = {
     urgent: ["tag-lacquer", "紧急"], high: ["tag-amber", "优先"], normal: ["", "一般"], low: ["", "低"],
   };
+  // 工单类型兜底文案：category 为空时不再显示"未分类"
+  var TYPE_LABEL = {
+    sensitive: "敏感事件",
+    medication_plan: "长期用药",
+    missed_medication: "漏服",
+  };
   // 四端 WS 接入白名单（与后端 WS_ROLES 对应）
   var WS_ALLOWED = { doctor: 1, nurse: 1, admin: 1, family: 1 };
   var WS_PING_INTERVAL = 25000;   // 心跳上行间隔
   var WS_DEAD_TIMEOUT = 60000;    // 心跳无响应判定阈值
   var POLL_INTERVAL = 30000;      // 断线轮询间隔（同时尝试重连）
   var ELDER_STORAGE_KEY = "kb_wo_elder";
+  var activeInstance = null;      // 当前页面的面板实例（供同页模块读取长者选择）
 
   function fmtTime(s) {
     if (!s) return "—";
@@ -44,6 +51,27 @@
   function statusTag(s) {
     var label = STATUS_LABEL[s] || s;
     return "<span class='tag " + (STATUS_TAG[s] || "") + "'>" + KB.esc(label) + "</span>";
+  }
+
+  function fmtDate(s) {
+    if (!s) return "—";
+    if (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    var d = new Date(s);
+    if (isNaN(d)) return String(s).slice(0, 10);
+    return d.toLocaleDateString("zh-CN", {
+      timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    }).replace(/\//g, "-");
+  }
+
+  function typeText(row) {
+    return row.category || TYPE_LABEL[row.type] || row.type || "未分类";
+  }
+
+  function standingBadge(row, label) {
+    // 类别/标题已写明「长期用药」时不再重复挂徽标
+    if (row.order_kind !== "standing") return "";
+    if (label && label.indexOf("长期用药") !== -1) return "";
+    return " <span class='tag tag-clay'>长期用药</span>";
   }
 
   function dstateTag(s) {
@@ -134,6 +162,11 @@
       return hit ? hit.name : "长者 " + String(id).slice(0, 8);
     }
 
+    function notifyElder(id) {
+      // 同页其他模块（如用药计划只读区）复用一个长者选择
+      document.dispatchEvent(new CustomEvent("kb:wo-elder", { detail: { elderId: id || null } }));
+    }
+
     function loadElders() {
       return KB.api("GET", "/api/v1/elders").then(function (rows) {
         state.elders = rows || [];
@@ -152,11 +185,17 @@
         if (saved && state.elders.some(function (e) { return e.elder_id === saved; })) {
           state.elderId = saved;
           sel.value = saved;
+          notifyElder(saved);
+        } else if (saved) {
+          // 失效的历史选择清掉，避免其他模块请求到未绑定的长者
+          sessionStorage.removeItem(ELDER_STORAGE_KEY);
+          notifyElder(null);
         }
         sel.addEventListener("change", function () {
           state.elderId = this.value || null;
           if (state.elderId) sessionStorage.setItem(ELDER_STORAGE_KEY, state.elderId);
           else sessionStorage.removeItem(ELDER_STORAGE_KEY);
+          notifyElder(state.elderId);
           state.page = 1;
           state.items = [];
           state.total = 0;
@@ -187,7 +226,8 @@
 
     function stateCell(it) {
       if (isStaff) {
-        var dot = it.pending && it.my_status === "unread" ? "<span class='wo-dot' title='未读'></span>" : "";
+        // 未读圆点按本人回执（is_read）判断，不再用处理项 account_id 推断
+        var dot = it.is_read === false ? "<span class='wo-dot' title='本人未读'></span>" : "";
         var label = it.my_status ? dstateTag(it.my_status) : statusTag(it.status);
         return dot + label;
       }
@@ -210,7 +250,7 @@
       var tbody = rows.map(function (it) {
         return "<tr class='wo-row' data-id='" + it.id + "'>" +
           "<td>" + stateCell(it) + "</td>" +
-          "<td>" + KB.esc(it.category || "未分类") + "</td>" +
+          "<td>" + KB.esc(typeText(it)) + standingBadge(it, typeText(it)) + "</td>" +
           "<td>" + KB.esc(elderName(it.elder_id)) + "</td>" +
           "<td>" + fmtTime(it.created_at) + "</td>" +
           "<td>×" + (it.occurrence_count || 1) + "</td>" +
@@ -318,6 +358,12 @@
     function notifyCreated(data) {
       if (!isStaff) return; // 弹窗与角标仅 staff；admin/family 只刷新列表
       var info = data || {};
+      var type = info.type || "sensitive";
+      if (type !== "sensitive") {
+        // 长期用药等非敏感工单只提示，不套用敏感事件的处理弹窗
+        KB.toast("新工单：" + (info.title || info.category || TYPE_LABEL[type] || "请查看"), "success");
+        return;
+      }
       KB.toast("新的敏感事件工单：" + (info.category || "未分类"), "error");
       if (popupOpen) return;
       popupOpen = true;
@@ -425,11 +471,14 @@
         }
         if (msg.type === "ticket.created") {
           notifyCreated(data);
+          if (!isStaff) KB.toast("工单已更新", "success");
           refresh();
           refreshCounts();
           return;
         }
         if (msg.type === "ticket.updated" || msg.type === "ticket.resolved") {
+          // 管理员/家属只做 toast + 刷新，不弹员工向处理弹窗
+          if (!isStaff) KB.toast("工单已更新", "success");
           refresh();
           refreshCounts();
         }
@@ -495,15 +544,23 @@
     function renderDetail(d) {
       var handled = d.my_status === "handled";
       var closed = d.status === "resolved" || d.status === "cancelled";
+      var standing = d.order_kind === "standing";
 
-      var html = "<h3>工单详情 · " + KB.esc(d.title || "敏感事件") + "</h3>" +
+      var title = d.title || TYPE_LABEL[d.type] || "工单";
+      var html = "<h3>工单详情 · " + KB.esc(title) +
+        standingBadge(d, title) + "</h3>" +
         "<p class='faint'>工单号 " + KB.esc(String(d.id).slice(0, 8)) +
         " ｜ 创建于 " + fmtTime(d.created_at) +
         " ｜ 发生 " + (d.occurrence_count || 1) + " 次</p>" +
         "<div class='toolbar' style='margin:10px 0 6px;'>" + statusTag(d.status) + priorityTag(d.priority) + "</div>" +
         "<dl class='kv'>" +
         "<dt>长者</dt><dd>" + KB.esc(elderName(d.elder_id)) + "</dd>" +
-        "<dt>类别</dt><dd>" + KB.esc(d.category || "未分类") + "</dd>" +
+        "<dt>类别</dt><dd>" + KB.esc(typeText(d)) + "</dd>" +
+        "<dt>工单类型</dt><dd>" + KB.esc(TYPE_LABEL[d.type] || d.type || "—") + "</dd>" +
+        (d.effective_from
+          ? "<dt>生效期</dt><dd>" + KB.esc(fmtDate(d.effective_from)) + " 至 " +
+            KB.esc(d.effective_until ? fmtDate(d.effective_until) : "长期") + "</dd>"
+          : "") +
         "<dt>更新时间</dt><dd>" + fmtTime(d.updated_at) + "</dd>" +
         (d.resolved_at ? "<dt>关闭时间</dt><dd>" + fmtTime(d.resolved_at) + "</dd>" : "") +
         "</dl>" +
@@ -533,17 +590,21 @@
       }
 
       if (role === "admin" && !closed) {
-        html += "<h3 class='hp-head'>终审关闭</h3>" +
-          "<div class='form-error' data-err></div>" +
-          "<div class='field'><label>终审备注（可选，500 字内）</label>" +
-          "<input data-note maxlength='500' placeholder='如 已电话回访家属并确认情况' /></div>";
+        if (standing) {
+          html += "<div class='warn-line mt-16'>⚠ <span>长期用药工单随用药计划停用/取消自动关闭，管理员不能手工关闭。</span></div>";
+        } else {
+          html += "<h3 class='hp-head'>终审关闭</h3>" +
+            "<div class='form-error' data-err></div>" +
+            "<div class='field'><label>终审备注（可选，500 字内）</label>" +
+            "<input data-note maxlength='500' placeholder='如 已电话回访家属并确认情况' /></div>";
+        }
       }
 
       html += "<div class='modal-actions'>";
       if (isStaff && !handled && !closed) {
         html += "<button class='btn btn-primary' data-act='submit'>完成处理</button>";
       }
-      if (role === "admin" && !closed) {
+      if (role === "admin" && !closed && !standing) {
         html += "<button class='btn btn-primary' data-act='close'>标记已处理</button>";
       }
       html += "<button class='btn btn-ghost' data-act='dismiss'>关闭</button></div>";
@@ -666,8 +727,10 @@
 
     var api = {
       refresh: function () { refresh(); refreshCounts(); },
+      getElderId: function () { return state.elderId; },
     };
     root.__workorders = api;
+    activeInstance = api;
 
     loadElders().then(function () {
       refresh();
@@ -683,5 +746,8 @@
     return api;
   }
 
-  window.KBWorkOrders = { mount: mount };
+  window.KBWorkOrders = {
+    mount: mount,
+    getElderId: function () { return activeInstance ? activeInstance.getElderId() : null; },
+  };
 })();
