@@ -820,9 +820,13 @@ async def get_work_order(
 def _mine_conditions(role: str, account_id: UUID, mine: str | None) -> list[Any]:
     """构造 ``mine`` 筛选条件（仅 staff 语义，非法值/非 staff 角色 → 422）。
 
-    - unread：无本人回执 且 本人角色处理项未 handled；
-    - read：有本人回执 且 本人角色处理项未 handled；
-    - handled：本人角色处理项已 handled。
+    - unread：工单未关闭 且 无本人回执 且 本人角色处理项未 handled；
+    - read：工单未关闭 且 有本人回执 且 本人角色处理项未 handled；
+    - handled：本人角色处理项已 handled（关闭工单保留，不因终态丢失）。
+
+    unread/read 排除已关闭工单：取消不回写处理项状态，关闭工单的回执
+    也写不进去（mark_read 409），不排除则永远卡在未读/已读，与
+    ``count_open_by_role`` 口径一致。
     """
     if role not in STAFF_ROLES:
         raise WorkOrderValidationError("当前角色不支持 mine 筛选")
@@ -847,11 +851,12 @@ def _mine_conditions(role: str, account_id: UUID, mine: str | None) -> list[Any]
             WorkorderRead.account_id == account_id,
         )
     )
+    open_only = Workorder.status.not_in(CLOSED_STATUSES)
 
     if mine == "unread":
-        return [~own_receipt, role_unhandled]
+        return [open_only, ~own_receipt, role_unhandled]
     if mine == "read":
-        return [own_receipt, role_unhandled]
+        return [open_only, own_receipt, role_unhandled]
     if mine == "handled":
         return [role_handled]
     raise WorkOrderValidationError("mine 仅支持 unread | read | handled")
@@ -871,7 +876,7 @@ async def list_work_orders(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Workorder], int]:
-    """按角色可见范围返回工单列表与总数；q 匹配标题/类别/触发原句/方案全文。
+    """按角色可见范围返回工单列表与总数；q 匹配长者姓名/标题/类别/触发原句/方案全文。
 
     ``mine`` 仅 staff 语义（unread=本人未读且角色未 handled / read=本人已读且
     角色未 handled / handled=角色已处理）；其他值抛 422（上层映射）。
@@ -897,6 +902,12 @@ async def list_work_orders(
     keyword = (q or "").strip()
     if keyword:
         pattern = _like_pattern(keyword)
+        elder_name_match = exists(
+            select(Elder.elder_id).where(
+                Elder.elder_id == Workorder.elder_id,
+                Elder.name.ilike(pattern, escape="\\"),
+            )
+        )
         plan_match = exists(
             select(WorkorderDisposition.disposition_id).where(
                 WorkorderDisposition.workorder_id == Workorder.workorder_id,
@@ -908,6 +919,7 @@ async def list_work_orders(
                 Workorder.title.ilike(pattern, escape="\\"),
                 Workorder.sensitive_category.ilike(pattern, escape="\\"),
                 Workorder.description.ilike(pattern, escape="\\"),
+                elder_name_match,
                 plan_match,
             )
         )

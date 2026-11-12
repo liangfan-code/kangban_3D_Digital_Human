@@ -323,6 +323,44 @@ async def test_list_visibility_and_q_search(db_session, seed):
     assert other_order.elder_id == seed["elders"]["other"].elder_id
 
 
+async def test_list_q_matches_elder_name(db_session, seed):
+    """q 搜索应命中长者姓名：医生搜本人负责长者姓名命中；未绑定长者的姓名不泄露。"""
+    await _bind_doctor_and_nurse(db_session, seed)
+    doctor = seed["accounts"]["doctor"]
+    admin = seed["accounts"]["admin"]
+
+    d1_order, _ = await _create(db_session, seed)  # d1 = 李双一
+    await _create(db_session, seed, elder="other", category="fall", text="在走廊摔倒了")
+
+    rows, total = await svc.list_work_orders(
+        db_session, role="doctor", account_id=doctor.account_id, q="李双一"
+    )
+    assert total == 1
+    assert rows[0].workorder_id == d1_order.workorder_id
+
+    # 未绑定长者（other = 钱他楼）的姓名不因姓名搜索泄露到医生可见范围外
+    leaked, leaked_total = await svc.list_work_orders(
+        db_session, role="doctor", account_id=doctor.account_id, q="钱他楼"
+    )
+    assert leaked_total == 0
+    assert leaked == []
+
+    # 管理员全量可见：姓名子串「双」可命中 d1（李双一）；d2（赵双二）未建单
+    admin_rows, admin_total = await svc.list_work_orders(
+        db_session, role="admin", account_id=admin.account_id, q="双"
+    )
+    # 只有 d1（李双一）建单，d2 未建单；admin 应命中 1 条
+    assert admin_total == 1
+    assert admin_rows[0].workorder_id == d1_order.workorder_id
+
+    # % 仍按字面量转义，不因新增姓名条件放大匹配
+    escaped, escaped_total = await svc.list_work_orders(
+        db_session, role="admin", account_id=admin.account_id, q="%"
+    )
+    assert escaped_total == 0
+    assert escaped == []
+
+
 async def test_list_sort_by_priority(db_session, seed):
     await _bind_doctor_and_nurse(db_session, seed)
     doctor = seed["accounts"]["doctor"]
@@ -350,6 +388,80 @@ async def test_list_sort_by_priority(db_session, seed):
         order="asc",
     )
     assert [row.workorder_id for row in rows_asc] == [low.workorder_id, urgent.workorder_id]
+
+
+async def test_mine_unread_and_read_exclude_closed(db_session, seed):
+    """unread/read 筛选排除已关闭工单：取消时处理项状态未同步，
+    若不排除则已取消工单永远卡在「未读/已读」，与角标口径不一致。"""
+    await _bind_doctor_and_nurse(db_session, seed)
+    nurse = seed["accounts"]["nurse_a"]
+
+    open_order, _ = await _create(db_session, seed)
+    # 已读后被取消：有回执 + 处理项 read，但工单已关闭
+    read_then_cancelled, _ = await _create(
+        db_session, seed, elder="d2", category="fall", text="在走廊摔倒了"
+    )
+    await svc.mark_read(
+        db_session,
+        workorder_id=read_then_cancelled.workorder_id,
+        role="nurse",
+        account_id=nurse.account_id,
+    )
+    # 未读即被取消：无回执 + 处理项仍 unread（问题 3 的现场）
+    unread_then_cancelled, _ = await _create(
+        db_session, seed, elder="d2", category="missed_medication", text="测试药A"
+    )
+    for row in (read_then_cancelled, unread_then_cancelled):
+        row.status = WorkorderStatus.CANCELLED
+    await db_session.flush()
+
+    unread_rows, unread_total = await svc.list_work_orders(
+        db_session, role="nurse", account_id=nurse.account_id, mine="unread"
+    )
+    assert unread_total == 1
+    assert unread_rows[0].workorder_id == open_order.workorder_id
+
+    read_rows, read_total = await svc.list_work_orders(
+        db_session, role="nurse", account_id=nurse.account_id, mine="read"
+    )
+    assert read_total == 0
+    assert read_rows == []
+
+
+async def test_mine_handled_includes_closed(db_session, seed):
+    """已处理的关闭工单仍出现在「已处理」筛选：handled 口径不因关闭而丢失。"""
+    await _bind_doctor_and_nurse(db_session, seed)
+    doctor = seed["accounts"]["doctor"]
+    nurse = seed["accounts"]["nurse_a"]
+    admin = seed["accounts"]["admin"]
+
+    workorder, _ = await _create(db_session, seed)
+    await svc.submit_disposition(
+        db_session,
+        workorder_id=workorder.workorder_id,
+        role="doctor",
+        account_id=doctor.account_id,
+        plan_text="已电话随访",
+    )
+    await svc.submit_disposition(
+        db_session,
+        workorder_id=workorder.workorder_id,
+        role="nurse",
+        account_id=nurse.account_id,
+        plan_text="已到床边查看",
+    )
+    closed = await svc.close_work_order(
+        db_session,
+        workorder_id=workorder.workorder_id,
+        admin_account_id=admin.account_id,
+    )
+    assert closed.status == WorkorderStatus.RESOLVED
+
+    rows, total = await svc.list_work_orders(
+        db_session, role="doctor", account_id=doctor.account_id, mine="handled"
+    )
+    assert total == 1
+    assert rows[0].workorder_id == workorder.workorder_id
 
 
 async def test_family_requires_valid_link(db_session, seed):

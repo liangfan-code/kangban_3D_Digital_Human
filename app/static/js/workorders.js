@@ -128,8 +128,9 @@
         : "<span class='faint'>历史工单可查可搜</span>") +
       "</div>" +
       "<div class='toolbar wo-toolbar'>" +
-      "<input type='search' data-q placeholder='搜索关键词：类别 / 触发原句 / 处理方案' />" +
+      "<input type='search' data-q placeholder='搜索关键词：长者姓名 / 类别 / 触发原句 / 处理方案' />" +
       "<button class='btn btn-primary btn-sm' data-search>搜索</button>" +
+      "<button class='btn btn-ghost btn-sm' data-reset style='display:none'>重置</button>" +
       "<select data-sort>" +
       sortOptions.map(function (o) {
         return "<option value='" + o[0] + "'>" + o[1] + "</option>";
@@ -180,16 +181,27 @@
         sel.innerHTML = state.elders.map(function (e) {
           return "<option value='" + e.elder_id + "'>" + KB.esc(e.name) + "</option>";
         }).join("");
-        // 恢复上次选择；不自动取第一个长者，未选择时展示空态且不发请求
+        // 恢复上次选择；无有效历史选择时按数量决定默认值：
+        // 唯一关联长者直接选中并通知其他模块，否则下拉显示第一项但状态为空，
+        // 家属永远停在“请选择长者”且没有第二项可切换（change 事件不触发）
         var saved = sessionStorage.getItem(ELDER_STORAGE_KEY);
-        if (saved && state.elders.some(function (e) { return e.elder_id === saved; })) {
+        if (saved && !state.elders.some(function (e) { return e.elder_id === saved; })) {
+          // 失效的历史选择清掉，避免其他模块请求到未绑定的长者
+          sessionStorage.removeItem(ELDER_STORAGE_KEY);
+          saved = null;
+        }
+        if (saved) {
           state.elderId = saved;
           sel.value = saved;
           notifyElder(saved);
-        } else if (saved) {
-          // 失效的历史选择清掉，避免其他模块请求到未绑定的长者
-          sessionStorage.removeItem(ELDER_STORAGE_KEY);
-          notifyElder(null);
+        } else if (state.elders.length === 1) {
+          state.elderId = state.elders[0].elder_id;
+          sel.value = state.elderId;
+          notifyElder(state.elderId);
+        } else {
+          // 多位关联长者：插入占位项，强制显式选择
+          sel.insertAdjacentHTML("afterbegin", "<option value=''>请选择长者</option>");
+          sel.value = "";
         }
         sel.addEventListener("change", function () {
           state.elderId = this.value || null;
@@ -226,8 +238,14 @@
 
     function stateCell(it) {
       if (isStaff) {
-        // 未读圆点按本人回执（is_read）判断，不再用处理项 account_id 推断
-        var dot = it.is_read === false ? "<span class='wo-dot' title='本人未读'></span>" : "";
+        // 已关闭工单只显示终态标签：关闭后 mark_read 会 409 写不进回执，
+        // 不能再按 is_read / my_status 显示红点或未读
+        if (it.status === "resolved" || it.status === "cancelled") {
+          return statusTag(it.status);
+        }
+        // 未读圆点按本人回执（is_read）判断；本人已处理则不再提醒
+        var handled = it.my_status === "handled";
+        var dot = !handled && it.is_read === false ? "<span class='wo-dot' title='本人未读'></span>" : "";
         var label = it.my_status ? dstateTag(it.my_status) : statusTag(it.status);
         return dot + label;
       }
@@ -237,13 +255,21 @@
     function renderList() {
       var rows = state.items; // 服务端筛选/分页，不做客户端二次过滤
       if (!rows.length) {
-        var emptyMsg = "暂无工单，敏感事件命中后会自动建单";
         if (role === "family" && !state.elderId) {
-          emptyMsg = "请选择长者查看工单与用药记录";
-        } else if (state.statusFilter) {
-          emptyMsg = "没有符合条件的工单，可切换筛选或翻页";
+          KB.renderState(listBox, { kind: "empty", message: "请选择长者查看工单与用药记录" });
+        } else if (state.q) {
+          // 搜索无结果：提示关键词并给一键清除入口，避免「回不去全部工单」
+          listBox.innerHTML =
+            "<div class='state'><span class='big'>🍃</span>没有匹配 “" + KB.esc(state.q) + "” 的工单" +
+            "<div class='retry'><button class='btn btn-ghost btn-sm' data-clear-q>清除搜索</button></div></div>";
+          listBox.querySelector("[data-clear-q]").addEventListener("click", clearSearch);
+        } else {
+          var emptyMsg = "暂无工单，敏感事件命中后会自动建单";
+          if (state.statusFilter) {
+            emptyMsg = "没有符合条件的工单，可切换筛选或翻页";
+          }
+          KB.renderState(listBox, { kind: "empty", message: emptyMsg });
         }
-        KB.renderState(listBox, { kind: "empty", message: emptyMsg });
         renderPager();
         return;
       }
@@ -683,12 +709,25 @@
     // ---------- 工具栏 ----------
 
     var qInput = root.querySelector("[data-q]");
+    var resetBtn = root.querySelector("[data-reset]");
+    function syncResetBtn() {
+      if (resetBtn) resetBtn.style.display = state.q ? "" : "none";
+    }
     function applySearch() {
       state.q = qInput.value.trim();
       state.page = 1;
+      syncResetBtn();
+      refresh();
+    }
+    function clearSearch() {
+      qInput.value = "";
+      state.q = "";
+      state.page = 1;
+      syncResetBtn();
       refresh();
     }
     root.querySelector("[data-search]").addEventListener("click", applySearch);
+    if (resetBtn) resetBtn.addEventListener("click", clearSearch);
     qInput.addEventListener("keydown", function (ev) {
       if (ev.key === "Enter") {
         ev.preventDefault();
