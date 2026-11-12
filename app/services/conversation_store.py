@@ -107,3 +107,19 @@ async def recent_messages(
     rows = list((await db.execute(stmt)).scalars().all())
     rows.reverse()
     return rows
+
+
+async def messages_since(
+    db: AsyncSession, thread_id: uuid.UUID, seq: int
+) -> list[ConversationMessage]:
+    """取 ``seq > :seq`` 的新消息，按 seq 正序（长期记忆萃取游标用）。"""
+
+    stmt = (
+        select(ConversationMessage)
+        .where(
+            ConversationMessage.thread_id == thread_id,
+            ConversationMessage.seq > seq,
+        )
+        .order_by(ConversationMessage.seq)
+    )
+    return list((await db.execute(stmt)).scalars().all())

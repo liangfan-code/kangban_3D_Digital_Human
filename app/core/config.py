@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
+    # Day7 段5：远程 embedding 单次请求超时（秒）；未配置时走本地哈希降级
+    embedding_timeout_seconds: float = 10.0
 
     # ---- System One（后续 Optional）----
     system_one_provider: str | None = None

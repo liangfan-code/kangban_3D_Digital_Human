@@ -21,6 +21,7 @@ from app.graphs.medication import submit_reply
 from app.router.executor import time_reply
 from app.router.signals import detect_medication_reply
 from app.services import medication_order as order_service
+from app.services import memory as memory_service
 from app.services.hitl import hitl_queue
 from app.services.medication_plan import (
     format_plan_reply,
@@ -144,6 +145,19 @@ def _medication_confirm_parameters() -> dict[str, Any]:
             },
         },
         "required": [],
+    }
+
+
+def _memory_recall_parameters() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "长者想回忆的事情或关键词，如「糖尿病」「孙女」「喜欢吃什么」",
+            },
+        },
+        "required": ["query"],
     }
 
 
@@ -312,6 +326,46 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
             )
         return ToolResult(ok=True, content=result.reply, degraded=result.degraded)
 
+    async def memory_recall(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """只读召回长期记忆；身份只认服务端上下文，无记忆时不编造。"""
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您回忆。",
+                degraded="missing_elder_context",
+            )
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return ToolResult(
+                ok=False,
+                content="您想让我回忆哪件事？",
+                degraded="memory_query_empty",
+            )
+        try:
+            async with get_session_factory()() as session:
+                memories = await memory_service.recall(session, elder_id, query)
+        except Exception as exc:  # noqa: BLE001 —— 记忆查询失败不向长者抛异常
+            logger.warning(
+                "长期记忆查询失败",
+                extra={
+                    "event": "memory_recall_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="我一时没想起来，等会儿再问问我。",
+                degraded=f"memory_recall_error:{type(exc).__name__}",
+            )
+        if not memories:
+            return ToolResult(ok=True, content="我还没记住这件事。")
+        snippets = [
+            str(memory.content).strip()[:40] for memory in memories[:2] if memory.content
+        ]
+        return ToolResult(ok=True, content="我记得：" + "；".join(snippets) + "。")
+
     async def media_play(args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # noqa: ARG001
         genre = str(args.get("genre") or "戏曲")
         return ToolResult(
@@ -366,6 +420,14 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
             "记录长者对服药提醒的回复（吃过了/还没吃/等会儿吃）",
             _medication_confirm_parameters(),
             medication_confirm,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "memory_recall",
+            "回忆关于这位长者的长期记忆（喜好、健康、家人、日常习惯）",
+            _memory_recall_parameters(),
+            memory_recall,
         )
     )
     registry.register(

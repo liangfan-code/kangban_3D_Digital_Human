@@ -56,6 +56,8 @@ class SessionState(BaseModel):
     thread_id: str
     summary: str = ""
     summary_upto_seq: int = 0
+    # Day7 段5：已萃取到 conversation_messages.seq 的游标；默认 0 保证旧数据可读
+    memory_upto_seq: int = 0
     turn_count: int = 0
     last_active: str = ""
     slots: SessionSlots = Field(default_factory=SessionSlots)

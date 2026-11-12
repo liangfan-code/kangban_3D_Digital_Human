@@ -62,6 +62,7 @@ from app.router.schemas import RouteDecision, RouteLayer
 from app.router.service import clarify_reply, route_text
 from app.services import actions as action_service
 from app.services import context_summary, conversation_store
+from app.services import memory as memory_service
 from app.services.hitl import hitl_queue
 from app.services.latency import TurnTrace
 from app.services.resilience import CircuitOpen, get_llm_breaker, get_tts_breaker
@@ -83,6 +84,8 @@ MIN_SPEECH_MS = 250  # 整句有效语音时长下限：低于该值整句静默
 MAX_BUFFER_MS = 15_000  # 单句上限，防缓冲失控
 LOW_CONFIDENCE = 0.6  # 低置信打标线（大纲课时 3.3）
 MAX_VERIFY_FAILURES = 3  # 连续失败触发「主动确认」（ADR-008）
+# Day7 段5：新增消息达到该条数即后台触发一次长期记忆萃取（WS 关闭时另有 ≥2 条门槛）
+MEMORY_TRIGGER_MESSAGES = 4
 TTS_ECHO_GUARD_EXTRA_MS = 1500  # TTS 下发后的回声防护余量（实测事故：数字人朗读被麦克风
 #                                 回拾 → VAD 误判 → ASR 伪终句 → 再回复，形成自激循环；
 #                                 前端播放期静音 + onended 不可靠，服务端必须自有防线）
@@ -1106,6 +1109,13 @@ class VoiceSession:
         self.closed = False
         # 早期摘要后台任务：同一会话同时只允许一个，关闭时取消
         self._summary_task: asyncio.Task | None = None
+        # Day7 段5：长期记忆萃取后台任务（close 是同步方法，需缓存当前 running loop）
+        self._memory_task: asyncio.Task | None = None
+        self._thread_id: UUID | None = None
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None  # 同步测试/无运行循环：跳过后台记忆任务
         # Day6.1：「重复一遍」规则复用上一轮已播内容，不调任何模型
         self._last_reply: str | None = None
 
@@ -1422,6 +1432,7 @@ class VoiceSession:
             IdentitySource.VOICEPRINT if self.verified_elder_id else IdentitySource.ANONYMOUS
         )
         thread_id, history = await self._load_context(identity)
+        self._thread_id = thread_id
         if trace:
             trace.set_meta("thread_id", str(thread_id) if thread_id else None)
         context_text = await self._prepare_state(thread_id, final_text)
@@ -1635,9 +1646,108 @@ class VoiceSession:
             return
         if persisted:
             self._schedule_summary(thread_id)
+            await self._maybe_schedule_memory(thread_id)
 
     async def _prepare_state(self, thread_id: UUID | None, final_text: str) -> str | None:
-        return await _prepare_turn_state(thread_id, final_text)
+        """纯状态上下文 + 长期记忆上下文（仅身份已确认时召回）。"""
+        context = await _prepare_turn_state(thread_id, final_text)
+        memory_context = await self._recall_memory_context(final_text)
+        if not memory_context:
+            return context
+        return f"{context}\n\n{memory_context}" if context else memory_context
+
+    async def _recall_memory_context(self, query: str) -> str | None:
+        """匿名/未确认身份不查记忆；召回失败只记降级，不中断回复。"""
+        if self.verified_elder_id is None or self._db_factory is None:
+            return None
+        try:
+            async with self._db_factory() as db:
+                return await memory_service.build_recall_context(
+                    db, elder_id=self.verified_elder_id, query=query
+                )
+        except Exception as exc:  # noqa: BLE001 —— 记忆召回失败不得阻断通话
+            logger.warning(
+                "记忆召回降级",
+                extra={
+                    "event": "memory_recall_degraded",
+                    "elder_id": str(self.verified_elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return None
+
+    async def _maybe_schedule_memory(self, thread_id: UUID) -> None:
+        """每轮落库后检查新增条数；达到阈值则后台萃取（同一 thread 只跑一个）。"""
+        if self.verified_elder_id is None or self._db_factory is None or self._loop is None:
+            return
+        try:
+            state = await get_session_store().load(str(thread_id))
+            async with self._db_factory() as db:
+                pending = await conversation_store.messages_since(
+                    db, thread_id, state.memory_upto_seq
+                )
+        except Exception:  # noqa: BLE001 —— 游标不可得时跳过本轮触发
+            logger.exception("memory cursor check failed")
+            return
+        if len(pending) >= MEMORY_TRIGGER_MESSAGES:
+            self._schedule_memory_task(thread_id, final=False)
+
+    def _schedule_memory_task(self, thread_id: UUID, *, final: bool) -> None:
+        """绑定当前 uvicorn 事件循环投递后台萃取（禁止新建 loop）。"""
+        if self.verified_elder_id is None or self._db_factory is None:
+            return
+        if self._loop is None or self._loop.is_closed():
+            return
+        if self._memory_task is not None and not self._memory_task.done():
+            return  # 同一会话同时只跑一个萃取任务，避免重复写记忆
+        self._memory_task = self._loop.create_task(self._extract_memory(thread_id, final=final))
+
+    async def _extract_memory(self, thread_id: UUID, *, final: bool) -> None:
+        """后台萃取：成功才推进 ``memory_upto_seq``，失败下一轮重试。"""
+        if self.verified_elder_id is None or self._db_factory is None:
+            return
+        try:
+            state = await get_session_store().load(str(thread_id))
+            async with self._db_factory() as db:
+                rows = await conversation_store.messages_since(
+                    db, thread_id, state.memory_upto_seq
+                )
+                # WS 关闭触发：新增消息不足 2 条不萃取，避免单句噪声
+                if final and len(rows) < 2:
+                    return
+                if not rows:
+                    return
+                messages = [{"role": row.role, "content": row.content} for row in rows]
+                stats = await memory_service.extract_and_remember(
+                    db,
+                    elder_id=self.verified_elder_id,
+                    messages=messages,
+                    thread_id=thread_id,
+                )
+                if stats is None:
+                    return  # 萃取降级：不推进游标
+                await db.commit()
+                latest_seq = rows[-1].seq
+            async with get_session_store().mutate(str(thread_id)) as latest:
+                latest.memory_upto_seq = max(latest.memory_upto_seq, latest_seq)
+            logger.info(
+                "长期记忆萃取完成",
+                extra={
+                    "event": "memory_extract_finished",
+                    "thread_id": str(thread_id),
+                    "elder_id": str(self.verified_elder_id),
+                    "count": stats["written"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 —— 后台任务异常只记日志
+            logger.warning(
+                "长期记忆萃取失败",
+                extra={
+                    "event": "memory_extract_failed",
+                    "thread_id": str(thread_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     def _schedule_summary(self, thread_id: UUID) -> None:
         """把早期摘要放到后台任务，绑定当前 uvicorn 事件循环（禁止新建 loop）。"""
@@ -1741,6 +1851,9 @@ class VoiceSession:
         self.closed = True
         if self._summary_task is not None and not self._summary_task.done():
             self._summary_task.cancel()
+        # Day7 段5：会话结束补一次长期记忆萃取（新增 <2 条由任务内部跳过）
+        if self._thread_id is not None and self.verified_elder_id is not None:
+            self._schedule_memory_task(self._thread_id, final=True)
 
 
 class VoiceSessionManager:

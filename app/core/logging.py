@@ -124,6 +124,17 @@ class JsonFormatter(logging.Formatter):
             "failed",
             "count",
             "bed_no",
+            # Day7 段5 长期记忆：只记模型/维度/条数/统计，不记记忆正文
+            "model",
+            "dimension",
+            "elapsed_ms",
+            "duplicate",
+            "superseded",
+            "suppressed",
+            "merged",
+            "categories",
+            "count_new",
+            "dry_run",
         ):
             value = getattr(record, key, None)
             if value is not None:

@@ -485,6 +485,22 @@ async def _scan_job() -> None:
         )
 
 
+async def _weekly_memory_job() -> None:
+    """Day7 段5：每周日 03:00 长期记忆维护（过期抑制/重复归并/冷热分层）。"""
+    try:
+        from app.services.memory import weekly_maintenance
+
+        await weekly_maintenance(dry_run=False)
+    except Exception as exc:  # noqa: BLE001 —— job 级兜底
+        logger.error(
+            "每周记忆维护 job 异常",
+            extra={
+                "event": "memory_maintenance_job_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
+
 async def run_startup_backfill(
     *, now: datetime | None = None, session_factory: Callable[[], Any] | None = None
 ) -> dict[str, int] | None:
@@ -526,6 +542,7 @@ async def start_medication_scheduler(settings: Settings | None = None) -> Any | 
         )
         return None
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 
     interval = max(5, settings.medication_scan_interval_seconds)
@@ -537,6 +554,17 @@ async def start_medication_scheduler(settings: Settings | None = None) -> Any | 
         max_instances=1,
         coalesce=True,
         misfire_grace_time=max(30, interval // 2),
+        replace_existing=True,
+    )
+    # Day7 段5：长期记忆维护复用同一调度器，不新建调度器
+    scheduler.add_job(
+        _weekly_memory_job,
+        trigger=CronTrigger(
+            day_of_week="sun", hour=3, minute=0, timezone=settings.app_timezone
+        ),
+        id="memory_maintenance_weekly",
+        max_instances=1,
+        coalesce=True,
         replace_existing=True,
     )
     scheduler.start()
