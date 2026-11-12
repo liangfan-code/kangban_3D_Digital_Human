@@ -1765,5 +1765,17 @@ class VoiceSessionManager:
         if session is not None:
             session.feed_pcm(pcm)
 
+    def get(self, device_id: UUID) -> VoiceSession | None:
+        """按设备取会话（Day7 段4 外呼用；不对外暴露 WS 对象）。"""
+        return self._sessions.get(device_id)
+
+    async def send_event_to(self, device_id: UUID, event: dict) -> bool:
+        """按设备下发一条 WS 事件；未连接返回 False，由调用方走降级标记。"""
+        session = self._sessions.get(device_id)
+        if session is None:
+            return False
+        await session.send_event(dict(event))
+        return True
+
 
 voice_session_manager = VoiceSessionManager()

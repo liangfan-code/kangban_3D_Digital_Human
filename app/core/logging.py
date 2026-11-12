@@ -102,6 +102,28 @@ class JsonFormatter(logging.Formatter):
             "agent_steps",
             "tool_calls",
             "mcp_calls",
+            # Day7 段4 定时用药外呼：只记任务/设备/通道/计数等元数据
+            "attempt",
+            "attempt_before",
+            "status",
+            "channel",
+            "call_id",
+            "target_device_id",
+            "plan_id",
+            "plan_status",
+            "scheduled_at",
+            "interval_seconds",
+            "timezone",
+            "due",
+            "scanned",
+            "created_order",
+            "triggered",
+            "timed_out",
+            "missed",
+            "skipped",
+            "failed",
+            "count",
+            "bed_no",
         ):
             value = getattr(record, key, None)
             if value is not None:

@@ -15,6 +15,9 @@ offer/answer 处理与轨接收模式；适配本项目改动：
 """
 
 import asyncio
+import time
+import uuid
+from fractions import Fraction
 
 import av
 from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
@@ -183,3 +186,167 @@ class RealtimeRegistry:
 
 
 realtime_registry = RealtimeRegistry()
+
+
+# ---------------------------------------------------------------------------
+# Day7 段4：服务端主动外呼（独立 PC + 下行 TTS 音轨）
+# ---------------------------------------------------------------------------
+
+
+class OutboundCallError(RuntimeError):
+    """外呼建连失败（超时/连接态 failed），调用方据此降级。"""
+
+
+class TtsAudioTrack(MediaStreamTrack):
+    """下行 TTS 音轨：recv() 按 20ms 返回 16k mono s16 帧（pts/time_base 正确）。
+
+    音频只走内存，不落盘、不进日志；PCM 播完抛 MediaStreamError 结束轨。
+    """
+
+    kind = "audio"
+
+    def __init__(self, pcm: bytes, sample_rate: int = PCM_SAMPLE_RATE) -> None:
+        super().__init__()
+        self._pcm = pcm if sample_rate == PCM_SAMPLE_RATE else _resample_to_16k(pcm, sample_rate)
+        self._offset = 0
+        self._pts = 0
+        self._started_at: float | None = None
+
+    async def recv(self) -> av.AudioFrame:
+        if self._offset >= len(self._pcm):
+            raise MediaStreamError
+        chunk = self._pcm[self._offset : self._offset + FRAME_SAMPLES * 2]
+        self._offset += len(chunk)
+        if len(chunk) < FRAME_SAMPLES * 2:  # 末帧补齐，避免帧长不整
+            chunk += b"\x00" * (FRAME_SAMPLES * 2 - len(chunk))
+
+        samples = len(chunk) // 2
+        frame = av.AudioFrame(format="s16", layout="mono", samples=samples)
+        frame.planes[0].update(chunk)
+        frame.sample_rate = PCM_SAMPLE_RATE
+        frame.pts = self._pts
+        frame.time_base = Fraction(1, PCM_SAMPLE_RATE)
+        self._pts += samples
+        await self._pace()
+        return frame
+
+    async def _pace(self) -> None:
+        """按真实播放速率出帧（20ms/帧），避免一次性灌满抖动缓冲。"""
+        now = time.monotonic()
+        if self._started_at is None:
+            self._started_at = now
+        target = self._started_at + self._pts / PCM_SAMPLE_RATE
+        delay = target - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+def _resample_to_16k(pcm: bytes, sample_rate: int) -> bytes:
+    """非 16k 的 TTS 输出统一重采样为 16k mono s16（内存内完成）。"""
+    if sample_rate <= 0:
+        return pcm
+    frame = av.AudioFrame(format="s16", layout="mono", samples=len(pcm) // 2)
+    frame.planes[0].update(pcm)
+    frame.sample_rate = sample_rate
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=PCM_SAMPLE_RATE)
+    out = bytearray()
+    for resampled in resampler.resample(frame):
+        out.extend(resampled.to_ndarray().astype("int16").tobytes())
+    return bytes(out)
+
+
+class OutboundCall:
+    """一次服务端主动外呼：先 addTrack 再 createOffer，answer 由 WS 回传。"""
+
+    def __init__(
+        self,
+        device_id,
+        *,
+        call_id: str | None = None,
+        configuration: RTCConfiguration | None = None,
+    ) -> None:
+        self.device_id = device_id
+        self.call_id = call_id or uuid.uuid4().hex
+        self.pc = RTCPeerConnection(configuration=configuration or _rtc_configuration())
+        self.answered = asyncio.Event()
+        self.failed = asyncio.Event()
+        self.audio_track: TtsAudioTrack | None = None
+        self._closed = False
+
+        def on_state() -> None:
+            state = self.pc.connectionState
+            logger.info(
+                "rtc outbound state",
+                extra={
+                    "event": "rtc_outbound_state",
+                    "device_id": str(self.device_id),
+                    "call_id": self.call_id,
+                    "state": state,
+                },
+            )
+            if state in ("failed", "closed"):
+                self.failed.set()
+                self.answered.set()  # 让等待方立即返回并走降级
+
+        self.pc.on("connectionstatechange", on_state)
+
+    async def create_offer(self, pcm: bytes, sample_rate: int = PCM_SAMPLE_RATE) -> str:
+        """addTrack 必须早于 createOffer（否则 offer 里没有下行媒体行）。"""
+        self.audio_track = TtsAudioTrack(pcm, sample_rate)
+        self.pc.addTrack(self.audio_track)
+        offer = await self.pc.createOffer()
+        await self.pc.setLocalDescription(offer)
+        return self.pc.localDescription.sdp
+
+    async def set_answer(self, sdp: str, type_: str = "answer") -> None:
+        await self.pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=type_))
+        self.answered.set()
+
+    async def wait_answered(self, timeout: float) -> None:
+        try:
+            await asyncio.wait_for(self.answered.wait(), timeout=timeout)
+        except TimeoutError as exc:
+            raise OutboundCallError("answer timeout") from exc
+        if self.failed.is_set():
+            raise OutboundCallError("connection failed")
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.audio_track is not None:
+            self.audio_track.stop()
+        await self.pc.close()
+
+
+class OutboundCallRegistry:
+    """call_id → 外呼 PC；同一设备同一时刻只允许一个外呼。"""
+
+    def __init__(self) -> None:
+        self._calls: dict[str, OutboundCall] = {}
+
+    def add(self, call: OutboundCall) -> None:
+        self._calls[call.call_id] = call
+
+    def get(self, call_id: str) -> OutboundCall | None:
+        return self._calls.get(call_id)
+
+    def find_by_device(self, device_id) -> OutboundCall | None:
+        for call in self._calls.values():
+            if call.device_id == device_id:
+                return call
+        return None
+
+    async def close(self, call_id: str) -> None:
+        call = self._calls.pop(call_id, None)
+        if call is not None:
+            await call.close()
+
+    async def close_all(self) -> None:
+        calls = list(self._calls.values())
+        self._calls.clear()
+        for call in calls:
+            await call.close()
+
+
+outbound_call_registry = OutboundCallRegistry()

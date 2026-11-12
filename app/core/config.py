@@ -126,6 +126,17 @@ class Settings(BaseSettings):
     # LangGraph SQLite checkpointer 路径；为空时用 logs/checkpoints/medication.sqlite3
     medication_checkpoint_path: str | None = None
 
+    # ---- Day7 段4 定时用药外呼（Optional，全部有安全默认值）----
+    medication_reminder_enabled: bool = True
+    medication_scan_interval_seconds: int = 30
+    # 到点前后多少分钟内允许触发（Asia/Shanghai 解释 schedule.times）
+    medication_reminder_window_minutes: int = 5
+    # 每次外呼等待长者确认的时长；超时由下一轮扫描判定，不占住 job
+    medication_call_timeout_seconds: int = 30
+    medication_retry_limit: int = 3
+    # 启动补漏只回看最近 N 小时，避免长时间停机后补出海量历史噪声
+    medication_backfill_lookback_hours: int = 24
+
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None
     webrtc_turn_servers: str | None = None

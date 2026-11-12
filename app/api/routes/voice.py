@@ -37,6 +37,7 @@ from app.core.logging import get_logger
 from app.db.session import get_session, get_session_factory
 from app.integrations import ProviderUnavailable
 from app.models.enums import AccountRole, IdentitySource
+from app.realtime.session import outbound_call_registry
 from app.services.device import DeviceNotFound, device_self_view
 from app.services.voice import (
     BiometricDeviceMissing,
@@ -353,6 +354,52 @@ async def _build_session_context(
     return candidates, embeddings, view
 
 
+async def _handle_call_answer(event: dict, device_id: UUID) -> None:
+    """服务端主动外呼的 answer 回执：按 call_id 找到挂起 PC 并设置远端描述。"""
+    call_id = str(event.get("call_id") or "")
+    call = outbound_call_registry.get(call_id)
+    if call is None:
+        logger.warning(
+            "未知外呼 call_id，忽略 answer",
+            extra={
+                "event": "rtc_call_answer_unknown",
+                "call_id": call_id,
+                "device_id": str(device_id),
+            },
+        )
+        return
+    if call.device_id != device_id:
+        # 越权：answer 必须来自外呼目标设备，直接拒绝并留审计痕迹
+        logger.warning(
+            "外呼 answer 设备不匹配，拒绝",
+            extra={
+                "event": "rtc_call_answer_forbidden",
+                "call_id": call_id,
+                "device_id": str(device_id),
+                "target_device_id": str(call.device_id),
+            },
+        )
+        return
+    sdp = event.get("sdp")
+    if not isinstance(sdp, str) or not sdp:
+        logger.warning(
+            "外呼 answer 缺少 sdp",
+            extra={"event": "rtc_call_answer_invalid", "call_id": call_id},
+        )
+        return
+    try:
+        await call.set_answer(sdp, str(event.get("type") or "answer"))
+    except Exception as exc:  # noqa: BLE001 —— 单个 answer 失败不得断开 WS
+        logger.warning(
+            "设置外呼 answer 失败",
+            extra={
+                "event": "rtc_call_answer_failed",
+                "call_id": call_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
+
 @router.websocket("/voice/ws")
 async def voice_ws(ws: WebSocket, session: AsyncSession = Depends(get_session)) -> None:
     """语音事件通道：设备 Token 鉴权 → 会话状态机 → JSON 事件流。
@@ -435,6 +482,8 @@ async def voice_ws(ws: WebSocket, session: AsyncSession = Depends(get_session)) 
                         "state": "verified" if resumed else "awaiting_voiceprint",
                     }
                 )
+            elif event.get("type") == "rtc_call_answer":
+                await _handle_call_answer(event, device_id)
             elif event.get("type") == "ping":
                 await send_event({"type": "pong"})
     except WebSocketDisconnect:

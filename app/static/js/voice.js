@@ -31,6 +31,7 @@
   var audioCtx = null, ttsQueue = [], ttsPlaying = false;
   var avatarDest = null; // Day4 口型桥：TTS → MediaStreamDestination → 3D 数字人
   var currentSrc = null, gainNode = null, volumeGain = 1; // Day6.1：规则层 control 事件
+  var callPc = null, callAudio = null; // Day7 段4：服务端主动外呼（下行 TTS）
   var connected = false;
 
   function setStatus(text, cls) {
@@ -185,6 +186,9 @@
       case "control":
         handleControl(ev);
         break;
+      case "rtc_call_offer":
+        acceptCallOffer(ev);
+        break;
       case "done":
         if (!ev.text) { setStatus("没有听清，请再说一次", "warn"); }
         else setStatus("本轮完成，请继续说话", "ok");
@@ -250,6 +254,57 @@
     if (action === "media_play") {
       appendLog(logReply, "🎵 点播：" + (ev.genre || "戏曲") + "（媒体播放 Day7 接入）", "");
     }
+  }
+
+  // ---------- 服务端主动外呼（Day7 段4：rtc_call_offer → answer 回传）----------
+  function closeOutboundCall() {
+    if (callPc) { try { callPc.close(); } catch (e) { /* 已关闭 */ } callPc = null; }
+    if (callAudio) {
+      try { callAudio.pause(); } catch (e) { /* 忽略 */ }
+      callAudio.srcObject = null;
+      callAudio = null;
+    }
+  }
+
+  /** 服务端 offer（下行 TTS 音轨）→ answer；失败只记日志，房间日常收音不受影响。 */
+  function acceptCallOffer(ev) {
+    if (!ev || !ev.sdp || !ws) return;
+    closeOutboundCall();
+    setStatus("康伴正在提醒您……", "warn");
+    appendLog(logReply, "📞 收到用药提醒外呼", "r");
+    var pc = new RTCPeerConnection();
+    callPc = pc;
+    pc.ontrack = function (e) {
+      // 服务端 sendonly 音频：直接播放远端流（不经本地 TTS 队列，避免与日常朗读串台）
+      callAudio = new Audio();
+      callAudio.srcObject = e.streams[0];
+      callAudio.autoplay = true;
+      callAudio.play().catch(function (err) {
+        appendLog(logReply, "[提示] 浏览器拦截了自动播放：" + err.message, "e");
+      });
+    };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        closeOutboundCall();
+      }
+    };
+    pc.setRemoteDescription({ type: ev.sdp_type || "offer", sdp: ev.sdp })
+      .then(function () { return pc.createAnswer(); })
+      .then(function (answer) { return pc.setLocalDescription(answer); })
+      .then(function () {
+        ws.send(JSON.stringify({
+          type: "rtc_call_answer",
+          call_id: ev.call_id,
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type
+        }));
+        setStatus("用药提醒播放中", "ok");
+      })
+      .catch(function (err) {
+        appendLog(logReply, "[降级] 外呼连接失败：" + err.message, "e");
+        setStatus("外呼连接失败，等待服务端改用语音通道", "warn");
+        closeOutboundCall();
+      });
   }
 
   // ---------- TTS 播放（base64 16k PCM + viseme 时间轴 → AudioContext）----------
@@ -360,6 +415,7 @@
 
   function stopVoice() {
     if (pc) { pc.close(); pc = null; }
+    closeOutboundCall();
     if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
     if (window.KangbanAvatar && KangbanAvatar.clearVisemes) KangbanAvatar.clearVisemes();
     setStatus("已停止聆听", "");
