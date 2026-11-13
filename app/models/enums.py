@@ -1,4 +1,4 @@
-﻿"""字符串枚举定义：数据库使用 VARCHAR + CHECK，不使用 PostgreSQL 原生枚举。"""
+"""字符串枚举定义：数据库使用 VARCHAR + CHECK，不使用 PostgreSQL 原生枚举。"""
 
 from enum import StrEnum
 
@@ -223,3 +223,30 @@ class HealthAuditAction(StrEnum):
     CREATE = "create"
     UPDATE = "update"
     DELETE = "delete"
+
+
+# ---- Day8：健康采集事件 ----
+
+
+class HealthEventLevel(StrEnum):
+    """三级分级：绿=归档、黄=护工确认、红=医生确认。"""
+
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
+class HealthEventStatus(StrEnum):
+    """事件状态机；数据库为权威，图只做一次性判定。"""
+
+    COLLECTING = "collecting"  # 字段未集齐，继续追问
+    PENDING_CONFIRM = "pending_confirm"  # 已建单，待人工确认（HITL）
+    CONFIRMED = "confirmed"
+    ESCALATED = "escalated"
+    ARCHIVED = "archived"  # 绿色直接归档 / 人工判定误报
+
+
+class HealthEventSource(StrEnum):
+    NIGHTLY = "nightly"
+    VOICE = "voice"
+    MANUAL = "manual"

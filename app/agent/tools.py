@@ -18,8 +18,10 @@ from app.agent.mcp_client import McpHost, McpToolInfo, get_mcp_host
 from app.core.logging import get_logger
 from app.db.session import get_session_factory
 from app.graphs.medication import submit_reply
+from app.models import Workorder
 from app.router.executor import time_reply
 from app.router.signals import detect_medication_reply
+from app.services import health_events as health_events_service
 from app.services import media as media_service
 from app.services import medication_order as order_service
 from app.services import memory as memory_service
@@ -30,6 +32,7 @@ from app.services.medication_plan import (
     today_plans,
 )
 from app.services.session_state import get_session_store
+from app.services.workorder_events import publish_workorder_event
 
 logger = get_logger(__name__)
 
@@ -162,6 +165,35 @@ def _memory_recall_parameters() -> dict[str, Any]:
             },
         },
         "required": ["query"],
+    }
+
+
+def _health_check_parameters() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "bp_systolic": {
+                "type": "integer",
+                "description": "高压（收缩压），长者没说就不要填",
+            },
+            "bp_diastolic": {
+                "type": "integer",
+                "description": "低压（舒张压），长者没说就不要填",
+            },
+            "sleep_minutes": {
+                "type": "integer",
+                "description": "昨晚睡眠分钟数，如 7 小时填 420",
+            },
+            "mood": {
+                "type": "string",
+                "description": "情绪：很好/一般/很差/低落/烦躁/睡不着",
+            },
+            "chief_complaint": {
+                "type": "string",
+                "description": "长者说不舒服的简短转述；没有不舒服就留空",
+            },
+        },
+        "required": [],
     }
 
 
@@ -605,6 +637,93 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
             client_events=[{"type": "hitl", "kind": "notify_family", "status": "pending"}],
         )
 
+    def _bounded_int(value: Any, lo: int, hi: int) -> int | None:
+        """工具入参范围校验：非法/越界按未提供处理，避免越界值触发整笔回滚。"""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            n = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return n if lo <= n <= hi else None
+
+    async def health_check(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """记录长者口述的健康数据；缺失项返回下一问，红色信号立即上报。"""
+        elder_id = _elder_uuid(ctx)
+        if elder_id is None:
+            return ToolResult(
+                ok=False,
+                content="我先确认一下您是哪位，再帮您记健康情况。",
+                degraded="missing_elder_context",
+            )
+        # 数值范围校验：模型可能输出任意整数，越界值会被 SmallInteger 列拒绝并
+        # 回滚整笔提交（红色主诉也随之丢失）。越界项按未提供处理，交给追问补齐。
+        dropped: list[str] = []
+        for key, lo, hi in (
+            ("bp_systolic", 60, 250),
+            ("bp_diastolic", 30, 150),
+            ("sleep_minutes", 0, 1440),
+        ):
+            raw = args.get(key)
+            valid = _bounded_int(raw, lo, hi)
+            if raw is not None and valid is None:
+                dropped.append(key)
+            args[key] = valid
+        if dropped:
+            logger.warning(
+                "健康采集数值越界已忽略",
+                extra={
+                    "event": "health_check_value_dropped",
+                    "elder_id": str(elder_id),
+                    "fields": ",".join(dropped),
+                },
+            )
+        try:
+            async with get_session_factory()() as session:
+                result = await health_events_service.submit_intake(
+                    session,
+                    elder_id=elder_id,
+                    source="voice",
+                    bp_systolic=args.get("bp_systolic"),
+                    bp_diastolic=args.get("bp_diastolic"),
+                    sleep_minutes=args.get("sleep_minutes"),
+                    mood=args.get("mood"),
+                    chief_complaint=args.get("chief_complaint"),
+                )
+                await session.commit()
+                # 与 HTTP 采集路由对齐：语音链路建单后同样推送 ticket.created
+                if result.workorder_created and result.workorder_id:
+                    try:
+                        workorder = await session.get(
+                            Workorder, uuid.UUID(str(result.workorder_id))
+                        )
+                        if workorder is not None:
+                            await publish_workorder_event("ticket.created", workorder)
+                    except Exception:  # noqa: BLE001 —— 推送失败不影响已入库工单
+                        logger.warning(
+                            "健康工单事件推送失败",
+                            extra={
+                                "event": "health_check_publish_failed",
+                                "elder_id": str(elder_id),
+                                "workorder_id": str(result.workorder_id),
+                            },
+                        )
+        except Exception as exc:  # noqa: BLE001 —— 工具失败返回可朗读降级
+            logger.warning(
+                "健康采集工具失败",
+                extra={
+                    "event": "health_check_failed",
+                    "elder_id": str(elder_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ToolResult(
+                ok=False,
+                content="这些数据我暂时没记上，等会儿再跟我说一遍好吗？",
+                degraded=f"health_check_error:{type(exc).__name__}",
+            )
+        return ToolResult(ok=True, content=result.reply)
+
     registry.register(
         ToolSpec("time_get", "查询当前日期与时间", _empty_parameters(), time_get)
     )
@@ -640,6 +759,14 @@ def build_default_registry(mcp_host: McpHost | None = None) -> ToolRegistry:
     )
     registry.register(
         ToolSpec("media_stop", "停止当前媒体播放", _empty_parameters(), media_stop)
+    )
+    registry.register(
+        ToolSpec(
+            "health_check",
+            "记录长者今天的血压、睡眠、情绪与不适主诉；缺项会继续追问",
+            _health_check_parameters(),
+            health_check,
+        )
     )
     registry.register(
         ToolSpec(

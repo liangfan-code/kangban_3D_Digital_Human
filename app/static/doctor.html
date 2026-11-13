@@ -17,6 +17,10 @@
 
     <section class="mt-24" id="workorders"></section>
 
+    <section class="mt-24" id="health-events"></section>
+
+    <section class="mt-24" id="health-trend"></section>
+
     <div class="grid grid-3 stagger" id="elder-cards"></div>
 
     <div class="grid grid-2 mt-24">
@@ -36,6 +40,9 @@
   <script src="/js/api.js"></script>
   <script src="/js/workorders.js"></script>
   <script src="/js/medication.js"></script>
+  <script src="/js/health-events.js"></script>
+  <script src="/vendor/chartjs/chart.umd.min.js"></script>
+  <script src="/js/health-trends.js"></script>
   <script>
     (function () {
       "use strict";
@@ -280,6 +287,8 @@
 
       load();
       KBWorkOrders.mount({ role: "doctor", rootId: "workorders" });
+      KangbanHealth.mount({ role: "doctor", rootId: "health-events" });
+      KangbanTrend.mount({ rootId: "health-trend" });
     })();
   </script>
 </body>

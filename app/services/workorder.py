@@ -49,6 +49,7 @@ logger = get_logger(__name__)
 SENSITIVE_TYPE = "sensitive"
 MEDICATION_PLAN_TYPE = "medication_plan"
 MISSED_MEDICATION_TYPE = "missed_medication"
+HEALTH_ALERT_TYPE = "health_alert"
 CLOSED_STATUSES = (WorkorderStatus.RESOLVED, WorkorderStatus.CANCELLED)
 STAFF_ROLES = (AccountRole.DOCTOR, AccountRole.NURSE)
 SNAPSHOT_MAX_TURNS = 5
@@ -107,6 +108,9 @@ def _add_event(
             actor_account_id=actor_account_id,
             actor_role=actor_role,
             payload=payload,
+            # 显式写时间：server_default=now() 在同事务内取值相同，
+            # 会让同一批事件（created/read/disposition/closed）排序不确定
+            created_at=datetime.now(UTC),
         )
     )
 
@@ -146,10 +150,11 @@ async def _load_disposition(
     return disposition
 
 
-def _visible_elder_ids(role: str, account_id: UUID) -> Any | None:
+def visible_elder_ids(role: str, account_id: UUID) -> Any | None:
     """按角色返回可见 elder_id 子查询；管理员返回 None 表示不限。
 
     护工无楼栋字段，经 elders.room_id → rooms.building_code 关联其授权楼栋。
+    Day8 起健康事件看板复用同一口径，故由私有函数提升为公开函数（行为不变）。
     """
     if role == AccountRole.ADMIN:
         return None
@@ -314,6 +319,109 @@ async def create_sensitive_work_order(
             "object_type": "workorder",
             "object_id": str(workorder.workorder_id),
             "sensitive_category": category,
+        },
+    )
+    return workorder, True
+
+
+# ---- 健康预警工单（Day8 段1） ----
+
+
+async def create_health_alert_work_order(
+    session: AsyncSession,
+    *,
+    elder_id: UUID,
+    level: str,
+    title: str,
+    description: str,
+    event_id: UUID | None = None,
+) -> tuple[Workorder, bool]:
+    """健康事件建单：同一事件同一级别只建一张（dedupe_key 唯一索引兜底）。
+
+    命中 dedupe_key 时仅复用未完结（open/acknowledged/in_progress）的工单；
+    事件归档后重开提交会拿到已关闭旧单，此时追加序号建新单，避免把
+    已解决/已取消的工单"复活"绑到新流程上。
+    """
+    dedupe_key = f"health_event:{event_id}:{level}" if event_id is not None else None
+    if dedupe_key is not None:
+        existing = (
+            await session.execute(
+                select(Workorder).where(Workorder.dedupe_key == dedupe_key)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.status in (
+                WorkorderStatus.OPEN,
+                WorkorderStatus.ACKNOWLEDGED,
+                WorkorderStatus.IN_PROGRESS,
+            ):
+                return existing, False
+            suffix = 2
+            while True:  # dedupe_key 唯一索引：为重开流程生成未占用的序号键
+                candidate = f"{dedupe_key}:{suffix}"
+                dup = (
+                    await session.execute(
+                        select(Workorder).where(Workorder.dedupe_key == candidate)
+                    )
+                ).scalar_one_or_none()
+                if dup is None:
+                    break
+                suffix += 1
+            dedupe_key = candidate
+
+    elder = await session.get(Elder, elder_id)
+    if elder is None:
+        raise WorkOrderNotFound("长者不存在")
+
+    workorder = Workorder(
+        elder_id=elder_id,
+        type=HEALTH_ALERT_TYPE,
+        source=WorkorderSource.MANUAL,
+        status=WorkorderStatus.OPEN,
+        priority=(
+            WorkorderPriority.URGENT if level == "red" else WorkorderPriority.HIGH
+        ),
+        title=title,
+        description=description,
+        dedupe_key=dedupe_key,
+        context_snapshot=[
+            {
+                "type": HEALTH_ALERT_TYPE,
+                "level": level,
+                "event_id": str(event_id) if event_id is not None else None,
+            }
+        ],
+    )
+    session.add(workorder)
+    await session.flush()
+
+    for role in STAFF_ROLES:
+        session.add(
+            WorkorderDisposition(
+                workorder_id=workorder.workorder_id,
+                role=role,
+                status=WorkorderDispositionStatus.UNREAD,
+            )
+        )
+    _add_event(
+        session,
+        workorder_id=workorder.workorder_id,
+        event_type="created",
+        payload={
+            "type": HEALTH_ALERT_TYPE,
+            "level": level,
+            "event_id": str(event_id) if event_id is not None else None,
+        },
+    )
+    await session.flush()
+    logger.info(
+        "健康预警工单已创建",
+        extra={
+            "event": "workorder_created",
+            "object_type": "workorder",
+            "object_id": str(workorder.workorder_id),
+            "type": HEALTH_ALERT_TYPE,
+            "level": level,
         },
     )
     return workorder, True
@@ -802,7 +910,7 @@ async def get_work_order(
     if role == AccountRole.FAMILY:
         await _assert_family_link(session, account_id, workorder.elder_id)
         return workorder
-    visible = _visible_elder_ids(role, account_id)
+    visible = visible_elder_ids(role, account_id)
     if visible is not None:
         allowed = (
             await session.execute(
@@ -888,7 +996,7 @@ async def list_work_orders(
             raise WorkOrderNotFound("工单不存在")
         await _assert_family_link(session, account_id, elder_id)
     else:
-        visible = _visible_elder_ids(role, account_id)
+        visible = visible_elder_ids(role, account_id)
         if visible is not None:
             conditions.append(Workorder.elder_id.in_(visible))
 
@@ -975,7 +1083,7 @@ async def count_open_by_role(
     _require_staff_role(account, role)
 
     conditions: list[Any] = [Workorder.status.not_in(CLOSED_STATUSES)]
-    visible = _visible_elder_ids(role, account_id)
+    visible = visible_elder_ids(role, account_id)
     if visible is not None:
         conditions.append(Workorder.elder_id.in_(visible))
     conditions.append(

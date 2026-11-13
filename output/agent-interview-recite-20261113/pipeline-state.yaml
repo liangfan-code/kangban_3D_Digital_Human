@@ -1,0 +1,55 @@
+schema_version: 1
+request_id: agent-interview-recite-20261113
+created_at: 2026-11-13T17:14:12+08:00
+updated_at: 2026-11-13T17:14:12+08:00
+
+entry_type: full_pipeline
+stage_chain: [1, 2, 3]
+
+output_docx_path: C:\Users\lmxyrqlxr\Desktop\面试\Agent开发工程师面试题库-背诵版.docx
+output_docx_user_specified: true
+
+current_stage: 1
+
+stages:
+  stage_0:
+    status: completed
+    completed_at: 2026-11-13T17:14:12+08:00
+    decision: full_pipeline
+  stage_1:
+    status: in_progress
+    started_at: 2026-11-13T17:14:12+08:00
+    completed_at: null
+    output_path: null
+    genre: null
+    expert_used: null
+    route_tag: null
+  stage_2:
+    status: pending
+    started_at: null
+    completed_at: null
+    route: null
+    html_sub: null
+    output_path: null
+    output_format: null
+    skills_invoked: []
+    design_tokens_path: null
+    fallback: false
+    fallback_reason: null
+  stage_3:
+    status: pending
+    started_at: null
+    completed_at: null
+    executor: null
+    input_format: null
+    output_path: null
+    skill_used: []
+    present_files_opened: false
+    fallback: false
+    fallback_reason: null
+
+consistency_check:
+  output_files_exist: null
+  stage_chain_complete: null
+  last_checked_at: null
+  errors: []

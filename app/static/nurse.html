@@ -17,6 +17,8 @@
 
     <section class="mt-24" id="workorders"></section>
 
+    <section class="mt-24" id="health-events"></section>
+
     <div class="card">
       <div class="card-title">
         <h3>今日待录入体征</h3>
@@ -48,6 +50,7 @@
 
   <script src="/js/api.js"></script>
   <script src="/js/workorders.js"></script>
+  <script src="/js/health-events.js"></script>
   <script>
     (function () {
       "use strict";
@@ -242,6 +245,7 @@
 
       load();
       KBWorkOrders.mount({ role: "nurse", rootId: "workorders" });
+      KangbanHealth.mount({ role: "nurse", rootId: "health-events" });
     })();
   </script>
 </body>

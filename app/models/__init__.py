@@ -1,4 +1,4 @@
-﻿"""ORM 模型统一加载：导入全部模型供 Alembic 收集完整元数据。"""
+"""ORM 模型统一加载：导入全部模型供 Alembic 收集完整元数据。"""
 
 # Day2：身份与权限
 from app.models.account import Account
@@ -13,6 +13,7 @@ from app.models.device_token import DeviceToken
 from app.models.elder import Elder
 from app.models.facility import Device, Room
 from app.models.health import HealthRecord
+from app.models.health_event import HealthEvent
 from app.models.health_profile import (
     ElderHealthRecord,
     HealthAiAnalysis,
@@ -46,6 +47,7 @@ __all__ = [
     "FamilyElderLink",
     "HealthAiAnalysis",
     "HealthAuditLog",
+    "HealthEvent",
     "HealthGrant",
     "HealthRecord",
     "HealthSummary",

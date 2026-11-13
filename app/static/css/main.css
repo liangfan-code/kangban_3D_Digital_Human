@@ -388,7 +388,7 @@ a:hover { text-decoration: underline; }
   gap: 6px;
   padding: 2px 12px;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.9;
   border: 1px solid var(--line);
   background: var(--card);
@@ -490,7 +490,7 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .mono {
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 /* ---------- 三态：加载 / 空 / 错误 ---------- */
@@ -732,7 +732,7 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--ink-soft);
   border: 1px solid var(--line);
   background: var(--card);
@@ -837,7 +837,7 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 /* ---------- 杂项 ---------- */
 
 .muted { color: var(--ink-soft); }
-.faint { color: var(--ink-faint); font-size: 14px; }
+.faint { color: var(--ink-faint); font-size: 15px; }
 .mt-8 { margin-top: 8px; }
 .mt-16 { margin-top: 16px; }
 .mt-24 { margin-top: 24px; }
@@ -918,6 +918,81 @@ td.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ai-block .ai-meta { font-size: 13.5px; color: var(--ink-soft); margin-top: 8px; }
 
 .ai-text { white-space: pre-wrap; margin: 0; }
+
+/* ---------- 健康趋势 / 家属日报（Day8 8.3） ---------- */
+
+.trend-chart {
+  position: relative;
+  height: 260px;
+}
+
+.report-card {
+  border-left: 6px solid var(--moss);
+  padding: 14px 16px;
+  background: var(--state-bg);
+  border-radius: var(--radius);
+}
+
+.report-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 19px;
+}
+
+.report-text {
+  margin: 12px 0;
+  font-size: 20px;
+  line-height: 1.7;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+/* ---------- 健康预警看板（Day8 8.2） ---------- */
+
+.health-item {
+  border-left: 6px solid var(--line);
+  padding: 12px 14px;
+  border-bottom: 1px dashed var(--line);
+  transition: background-color 0.2s ease;
+}
+
+/* 悬停高亮只用于无级别底色的行：黄/红行自带警示底色，hover 不覆盖（特异性更高会盖掉） */
+.health-item:not(.health-level-yellow):not(.health-level-red):hover {
+  background-color: var(--row-hover);
+}
+
+.health-item:last-child { border-bottom: none; }
+
+.health-level-green { border-left-color: var(--moss); }
+.health-level-yellow { border-left-color: var(--amber); background: var(--amber-soft); }
+.health-level-red { border-left-color: var(--lacquer); background: var(--lacquer-soft); }
+
+.health-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 19px;
+}
+
+.health-head .grow { flex: 1; min-width: 0; word-break: break-all; }
+
+.health-summary {
+  margin: 8px 0 6px;
+  color: var(--ink-soft);
+  font-size: 18px;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.health-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 /* ---------- 敏感事件工单（Day8） ---------- */
 

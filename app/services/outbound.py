@@ -447,10 +447,136 @@ async def trigger_medication_call(
     return result
 
 
+HEALTH_INTAKE_TEXT = "该休息了，我问您几个小问题，答不上来也没关系。"
+
+
+@dataclass
+class HealthIntakeResult:
+    """一次健康采集引导外呼的可观测结果（不记录长者音频与原文）。"""
+
+    elder_id: str
+    device_id: str | None = None
+    channel: str = "none"  # ws / none
+    degraded: str | None = None  # no_device / device_offline / call_in_progress / ...
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+async def trigger_health_intake_call(
+    elder_id: str | uuid.UUID,
+    *,
+    session_factory: Callable[[], Any] | None = None,
+    settings: Settings | None = None,
+    call_registry: Any | None = None,
+    session_manager: Any | None = None,
+) -> HealthIntakeResult:
+    """夜间健康采集引导语：只播一句开场白，逐题问答交给 Agent ``health_check``。
+
+    不新建 WS 逐题状态机，也不使用 RTC（避免踩 aiortc 时序坑）；
+    设备离线/已在外呼/无设备都返回可见降级，由调度器继续处理下一位长者。
+    """
+    settings = settings or get_settings()
+    registry = call_registry if call_registry is not None else outbound_call_registry
+    manager = session_manager if session_manager is not None else voice_session_manager
+    factory = session_factory or get_session_factory()
+
+    uid = _loads_order_id(elder_id)
+    if uid is None:
+        raise OutboundError("长者不存在")
+    async with factory() as session:
+        elder = await session.get(Elder, uid)
+        if elder is None:
+            raise OutboundError("长者不存在")
+        device = await resolve_elder_device(session, elder)
+
+    result = HealthIntakeResult(elder_id=str(uid))
+    if device is None:
+        result.degraded = "no_device"
+        logger.warning(
+            "健康采集外呼找不到设备",
+            extra={
+                "event": "health_intake_call_degraded",
+                "degraded": result.degraded,
+                "elder_id": result.elder_id,
+            },
+        )
+        return result
+    result.device_id = str(device.device_id)
+
+    if registry.find_by_device(device.device_id) is not None:
+        result.degraded = "call_in_progress"
+        logger.info(
+            "同一设备已有外呼，跳过健康采集引导",
+            extra={
+                "event": "health_intake_call_skipped",
+                "elder_id": result.elder_id,
+                "device_id": result.device_id,
+            },
+        )
+        return result
+
+    if manager.get(device.device_id) is None:
+        result.degraded = "device_offline"
+        logger.info(
+            "设备未连接，跳过健康采集引导",
+            extra={
+                "event": "health_intake_call_skipped",
+                "elder_id": result.elder_id,
+                "device_id": result.device_id,
+            },
+        )
+        return result
+
+    synthesized = await synthesize_pcm(HEALTH_INTAKE_TEXT, settings)
+    if synthesized is None:
+        result.degraded = "tts_unavailable"
+        return result
+    pcm, sample_rate = synthesized
+
+    try:
+        sent = await manager.send_event_to(
+            device.device_id, _tts_event(HEALTH_INTAKE_TEXT, pcm, sample_rate)
+        )
+    except Exception as exc:  # noqa: BLE001 —— WS 失败只记降级
+        result.degraded = "ws_send_failed"
+        result.error = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "健康采集引导 WS 下发失败",
+            extra={
+                "event": "health_intake_call_degraded",
+                "degraded": result.degraded,
+                "elder_id": result.elder_id,
+                "device_id": result.device_id,
+                "error": result.error,
+            },
+        )
+        return result
+
+    result.channel = "ws" if sent else "none"
+    if not sent:
+        result.degraded = "ws_send_failed"
+    logger.info(
+        "健康采集引导已下发",
+        extra={
+            "event": "health_intake_call_finished",
+            "elder_id": result.elder_id,
+            "device_id": result.device_id,
+            "channel": result.channel,
+            "degraded": result.degraded,
+        },
+    )
+    return result
+
+
 __all__ = [
+    "HealthIntakeResult",
+    "HEALTH_INTAKE_TEXT",
     "OutboundError",
     "OutboundResult",
     "resolve_elder_device",
     "synthesize_pcm",
+    "trigger_health_intake_call",
     "trigger_medication_call",
 ]

@@ -19,6 +19,8 @@
 
     <section class="mt-24" id="family-medication"></section>
 
+    <section class="mt-24" id="family-daily-report"></section>
+
     <div class="grid grid-2 stagger" id="elder-cards"></div>
 
     <div class="grid grid-2 mt-24">
@@ -27,17 +29,13 @@
         <div>家属关怀通话</div>
         <span class="ph-note">后续版本</span>
       </div>
-      <div class="placeholder-card">
-        <span class="ph-icon">📰</span>
-        <div>每日日报</div>
-        <span class="ph-note">后续版本</span>
-      </div>
     </div>
   </main>
 
   <script src="/js/api.js"></script>
   <script src="/js/workorders.js"></script>
   <script src="/js/medication.js"></script>
+  <script src="/js/health-daily.js"></script>
   <script>
     (function () {
       "use strict";
@@ -233,6 +231,7 @@
       if (window.KBMedication) {
         KBMedication.mountFamily({ rootId: "family-medication" });
       }
+      KangbanDaily.mount({ rootId: "family-daily-report" });
     })();
   </script>
 </body>

@@ -143,6 +143,15 @@ class Settings(BaseSettings):
     # 会话保留天数；0 = 不启用按天保留（expires_at 手动标记的到期会话仍会被治理清理）
     conversation_retention_days: int = 0
 
+    # ---- Day8 健康采集（Optional，全部有安全默认值）----
+    # 每晚主动采集小时（Asia/Shanghai），默认 21 点
+    health_collect_hour: int = 21
+    health_collect_enabled: bool = True
+    # 医院转诊接口；为空时用本地 Mock，不联网
+    hospital_endpoint: str | None = None
+    # 声纹阈值评测报告目录（脚本产出，管理端只读）
+    voiceprint_eval_report_dir: str = "data/reports"
+
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None
     webrtc_turn_servers: str | None = None

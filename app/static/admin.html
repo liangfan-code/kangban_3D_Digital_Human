@@ -24,6 +24,7 @@
       <button class="tab" data-tab="assignments">关联</button>
       <button class="tab" data-tab="healthgrants">健康授权</button>
       <button class="tab" data-tab="workorders">工单</button>
+      <button class="tab" data-tab="voiceprint">声纹评测</button>
     </nav>
 
     <!-- 房间 -->
@@ -124,6 +125,14 @@
     <section class="tab-panel" id="panel-workorders">
       <div id="workorders"></div>
     </section>
+
+    <!-- 声纹评测（只读） -->
+    <section class="tab-panel" id="panel-voiceprint">
+      <div class="toolbar">
+        <span class="faint">离线评测报告只读展示；评测由后端执行 python scripts/voiceprint_eval.py 产出，不在此触发模型加载。</span>
+      </div>
+      <div id="voiceprint-eval" class="mt-8"></div>
+    </section>
   </main>
 
   <script src="/js/api.js"></script>
@@ -138,6 +147,7 @@
           rooms: loadRooms, personas: loadPersonas, devices: loadDevices,
           accounts: loadAccounts, elders: loadElders, assignments: loadAssignments,
           healthgrants: loadHealthGrants, workorders: loadWorkorders,
+          voiceprint: loadVoiceprintEval,
         };
         if (loaders[tab]) loaders[tab]();
       });
@@ -1032,6 +1042,47 @@
         });
       }
       document.getElementById("audit-refresh").addEventListener("click", loadAudit);
+
+      // ================= 声纹阈值评测（只读） =================
+
+      function loadVoiceprintEval() {
+        var box = document.getElementById("voiceprint-eval");
+        KB.renderState(box, { kind: "loading" });
+        KB.api("GET", "/api/v1/admin/voiceprint-eval/latest").then(function (r) {
+          var counts = r.sample_count || {};
+          var eer = r.eer || {};
+          var meta =
+            "<div class='report-card' style='border-left-color:var(--moss);'>" +
+            "<div class='report-head'><b>阈值评测报告</b>" +
+            "<span class='faint'>生成于 " + fmtDate(r.generated_utc) + "</span></div>" +
+            "<p class='report-text' style='font-size:17px;'>" +
+            "样本 " + (counts.pairs || 0) + " 对（同人 " + (counts.same_speaker || 0) +
+            " / 异人 " + (counts.different_speaker || 0) + "）；Provider：" + KB.esc(r.provider || "—") +
+            "；EER " + (eer.value == null ? "—" : Number(eer.value).toFixed(4)) +
+            "；推荐阈值 " + (r.recommended_threshold == null ? "—" : Number(r.recommended_threshold).toFixed(2)) +
+            "</p></div>";
+
+          var rows = (r.threshold_table || []).map(function (row) {
+            var hit = row.threshold === r.recommended_threshold;
+            return "<tr" + (hit ? " style='background:var(--state-bg);font-weight:600;'" : "") + ">" +
+              "<td>" + Number(row.threshold).toFixed(2) + (hit ? " ★" : "") + "</td>" +
+              "<td>" + Number(row.far).toFixed(4) + "</td>" +
+              "<td>" + Number(row.frr).toFixed(4) + "</td>" +
+              "<td>" + Number(row.accuracy).toFixed(4) + "</td></tr>";
+          }).join("");
+          box.innerHTML = meta + "<div class='table-wrap'><table class='kb'><thead><tr>" +
+            "<th>阈值</th><th>FAR（误接受）</th><th>FRR（误拒绝）</th><th>准确率</th>" +
+            "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+        }).catch(function (e) {
+          if (e.status === 404) {
+            return KB.renderState(box, {
+              kind: "empty",
+              message: "尚未评测：请在后端运行 python scripts/voiceprint_eval.py 生成报告",
+            });
+          }
+          KB.renderState(box, { kind: "error", message: KB.errText(e), traceId: e.traceId }, loadVoiceprintEval);
+        });
+      }
     })();
   </script>
 </body>

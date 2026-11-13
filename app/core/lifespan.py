@@ -32,13 +32,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     await run_startup_backfill()
+    scheduler = None
     try:
-        await start_medication_scheduler()
+        scheduler = await start_medication_scheduler()
     except Exception as exc:  # noqa: BLE001 —— 调度器异常不得拖垮应用
         logger.error(
             "用药调度器启动失败",
             extra={
                 "event": "medication_scheduler_start_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+    # Day8：夜间健康采集复用同一调度器，不新建第二个 APScheduler
+    from app.services.health_scheduler import register_health_scheduler
+
+    try:
+        register_health_scheduler(scheduler)
+    except Exception as exc:  # noqa: BLE001 —— 采集 job 注册失败不得拖垮应用
+        logger.error(
+            "健康采集 job 注册失败",
+            extra={
+                "event": "health_scheduler_start_failed",
                 "error": f"{type(exc).__name__}: {exc}",
             },
         )
