@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     # 启动补漏只回看最近 N 小时，避免长时间停机后补出海量历史噪声
     medication_backfill_lookback_hours: int = 24
 
+    # ---- 会话数据治理（对话历史可视化 段4）----
+    # 会话保留天数；0 = 不启用按天保留（expires_at 手动标记的到期会话仍会被治理清理）
+    conversation_retention_days: int = 0
+
     # ---- WebRTC（后续 Optional）----
     webrtc_stun_servers: str | None = None
     webrtc_turn_servers: str | None = None

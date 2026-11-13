@@ -151,6 +151,8 @@
       case "verification":
         if (ev.accepted) {
           lastVoiceToken = ev.token || lastVoiceToken;
+          // 段 5：声纹通过即解锁「历史对话」区（300s 门禁 token 同步给面板）
+          if (window.KangbanHistory) window.KangbanHistory.setVoiceToken(lastVoiceToken);
           scoreEl.textContent = "声纹验证通过 · 相似度 " + ev.score;
           setStatus("声纹通过！请继续说话", "ok");
         } else if (ev.score == null && ev.reason) {

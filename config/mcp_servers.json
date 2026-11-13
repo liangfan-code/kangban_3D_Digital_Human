@@ -7,7 +7,7 @@
       "transport": "stdio",
       "args": ["mcp-servers/weather/server.py"],
       "cwd": ".",
-      "env": {"MCP_WEATHER_PROVIDER": "open_meteo"},
+      "env": {"MCP_WEATHER_PROVIDER": "open_meteo", "MCP_WEATHER_DEFAULT_CITY": ""},
       "tool_aliases": {"get_weather": "weather_get"},
       "allow_tools": ["get_weather"],
       "timeout_seconds": 8,

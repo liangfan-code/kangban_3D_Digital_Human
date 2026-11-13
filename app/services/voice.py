@@ -1655,8 +1655,24 @@ class VoiceSession:
         try:
             async with self._db_factory() as db:
                 persisted = await _persist_turn(db, thread_id, user_text, assistant_text)
-        except Exception:  # noqa: BLE001 —— 落库失败不影响通话
+        except Exception as exc:  # noqa: BLE001 —— 落库失败不影响通话，但要留痕
             logger.exception("conversation turn persist failed")
+            try:
+                async with self._db_factory() as fail_db:
+                    await conversation_store.record_write_failure(
+                        fail_db,
+                        thread_id=thread_id,
+                        role="user",
+                        seq=None,
+                        error_type=type(exc).__name__,
+                        detail=(
+                            f"turn persist failed: user={len(user_text)}ch "
+                            f"assistant={len(assistant_text)}ch"
+                        ),
+                    )
+                    await fail_db.commit()
+            except Exception:  # noqa: BLE001 —— 失败表也写不进时只能放弃
+                logger.exception("conversation write failure record failed")
             return
         if persisted:
             self._schedule_summary(thread_id)
@@ -1697,8 +1713,11 @@ class VoiceSession:
         try:
             state = await get_session_store().load(str(thread_id))
             async with self._db_factory() as db:
+                # 游标 DB 为准（memory_upto_seq 落库），Redis 仅会话内缓存：
+                # Redis TTL 24h 过期后 state 游标为 0，若只信 Redis 会重复萃取。
+                db_cursor = await conversation_store.get_memory_cursor(db, thread_id)
                 pending = await conversation_store.messages_since(
-                    db, thread_id, state.memory_upto_seq
+                    db, thread_id, max(state.memory_upto_seq, db_cursor)
                 )
         except Exception:  # noqa: BLE001 —— 游标不可得时跳过本轮触发
             logger.exception("memory cursor check failed")
@@ -1723,8 +1742,10 @@ class VoiceSession:
         try:
             state = await get_session_store().load(str(thread_id))
             async with self._db_factory() as db:
+                # 游标取 Redis 与 DB 的较大值（DB 为准，防 TTL 过期重复萃取）
+                db_cursor = await conversation_store.get_memory_cursor(db, thread_id)
                 rows = await conversation_store.messages_since(
-                    db, thread_id, state.memory_upto_seq
+                    db, thread_id, max(state.memory_upto_seq, db_cursor)
                 )
                 # WS 关闭触发：新增消息不足 2 条不萃取，避免单句噪声
                 if final and len(rows) < 2:
@@ -1740,6 +1761,9 @@ class VoiceSession:
                 )
                 if stats is None:
                     return  # 萃取降级：不推进游标
+                await conversation_store.advance_memory_cursor(
+                    db, thread_id=thread_id, seq=rows[-1].seq
+                )
                 await db.commit()
                 latest_seq = rows[-1].seq
             async with get_session_store().mutate(str(thread_id)) as latest:

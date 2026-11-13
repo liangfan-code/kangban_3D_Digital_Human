@@ -1,8 +1,10 @@
 """天气数据 Provider：Open-Meteo 真实数据 + 离线 fixture。
 
-- 只访问 Open-Meteo 两个域名（地理编码、预报），免费、无需 API Key；
+- 只访问 Open-Meteo 两个域名（地理编码、预报）与 ip-api.com（IP 定位，
+  免费、无需 API Key，仅在未指定城市且未配置默认城市时使用一次并缓存）；
 - 失败（网络、HTTP 非 200、响应缺字段）统一抛 ``WeatherUnavailable``，由 MCP 层转
   ``isError``，客户端再走可见降级，绝不编造温度；
+- 定位失败不猜城市，回落「您想查哪个城市」的反问（可见降级）；
 - 提供内存 TTL 缓存，只缓存最终文本，不缓存原始响应；
 - 日志只记事件、Provider、耗时与错误类型，不记完整 URL 或查询串。
 
@@ -19,9 +21,11 @@ import httpx
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+IPLOC_URL = "http://ip-api.com/json/"
 
 _USER_AGENT = "kangban-weather/1.0"
-_DEFAULT_TIMEOUT_SECONDS = 5.0
+# Open-Meteo 在国内网络偶发连接慢，5s 会出现 ConnectTimeout（2026-11-13 实测），放宽到 8s
+_DEFAULT_TIMEOUT_SECONDS = 8.0
 _DEFAULT_CACHE_TTL_SECONDS = 600.0
 _CACHE_CAPACITY = 32
 
@@ -79,10 +83,17 @@ _DEFAULT_FIXTURE = {"condition": "晴", "low": 18, "high": 25, "advice": "适合
 # (provider, 解析后的城市) → (写入时刻, 最终文本)
 _CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 
+# IP 自动定位缓存：(写入时刻, (城市名, 纬度, 经度) | None)。None 也缓存，
+# 避免定位服务故障时每次询问都去打一次 ip-api。
+_IPLOC: tuple[float, tuple[str, float, float] | None] | None = None
+_DEFAULT_IPLOC_TTL_SECONDS = 86400.0
+
 
 def _reset_cache() -> None:
     """清空缓存；测试用。"""
     _CACHE.clear()
+    global _IPLOC
+    _IPLOC = None
 
 
 def _env_float(name: str, default: float) -> float:
@@ -145,6 +156,41 @@ async def _geocode(
     except (KeyError, TypeError, ValueError) as exc:
         raise WeatherUnavailable("geocode_missing_fields") from exc
     return name, latitude, longitude
+
+
+async def _ip_location(
+    client: httpx.AsyncClient,
+) -> tuple[str, float, float] | None:
+    """按服务器出口 IP 自动定位城市（免费 ip-api.com，中文）；失败返回 None。
+
+    康伴部署在社区机房/本地宽带，出口 IP 的定位 ≈ 设备所在城市。
+    结果（含失败）缓存 ``MCP_WEATHER_IPLOC_TTL_SECONDS``（默认 24h）。
+    """
+    global _IPLOC
+    if _IPLOC is not None:
+        stored_at, value = _IPLOC
+        if monotonic() - stored_at < _env_float(
+            "MCP_WEATHER_IPLOC_TTL_SECONDS", _DEFAULT_IPLOC_TTL_SECONDS
+        ):
+            return value
+    located: tuple[str, float, float] | None = None
+    try:
+        payload = await _get(
+            client,
+            IPLOC_URL,
+            {"lang": "zh-CN", "fields": "status,lat,lon,city"},
+        )
+        if payload.get("status") == "success" and payload.get("city"):
+            located = (
+                str(payload["city"]),
+                float(payload["lat"]),
+                float(payload["lon"]),
+            )
+    except (WeatherUnavailable, TypeError, ValueError):
+        located = None
+    _IPLOC = (monotonic(), located)
+    logger.info("weather_iploc_ok located=%s", located is not None)
+    return located
 
 
 async def _forecast(
@@ -223,13 +269,22 @@ async def fetch_open_meteo(
 
 
 async def _fetch_with_client(client: httpx.AsyncClient, city: str) -> str:
-    location = await _geocode(client, city)
-    if location is None:
-        return _CITY_NOT_FOUND
-    name, latitude, longitude = location
+    if city:
+        location = await _geocode(client, city)
+        if location is None:
+            return _CITY_NOT_FOUND
+        name, latitude, longitude = location
+        label_city = city
+    else:
+        # 未指名城市：按服务器出口 IP 自动定位；定位不可用则反问（不编造）
+        located = await _ip_location(client)
+        if located is None:
+            return _CITY_MISSING
+        name, latitude, longitude = located
+        label_city = name
     condition, advice, low, high = await _forecast(client, latitude, longitude)
     return (
-        f"{_city_label(city, name)}今天{condition}，{low} 到 {high} 度，{advice}。"
+        f"{_city_label(label_city, name)}今天{condition}，{low} 到 {high} 度，{advice}。"
         "（数据来源 Open-Meteo，仅供参考）"
     )
 
@@ -287,9 +342,11 @@ async def get_weather_report(
     query_city = (city or "").strip()
     if not query_city or query_city == "本地":
         default_city = (os.getenv("MCP_WEATHER_DEFAULT_CITY") or "").strip()
-        if not default_city:
-            return _CITY_MISSING
         query_city = default_city
+        if not query_city and provider_name == "fixture":
+            # 离线示例数据没有定位概念，保持反问
+            return _CITY_MISSING
+        # open_meteo 且未配置默认城市 → 交给 fetch 层按出口 IP 自动定位（空串）
 
     cache_key = (provider_name, query_city)
     cached = _cache_get(cache_key)

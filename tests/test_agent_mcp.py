@@ -80,3 +80,71 @@ async def test_open_meteo_weather_live():
     assert "上海" in result.content
     assert "Open-Meteo" in result.content
     assert "示例数据" not in result.content
+
+
+# ---------------- 未指名城市 → 出口 IP 自动定位（2026-11-13 用户拍板） ----------------
+
+
+def _load_providers():
+    """providers 目录名带连字符不能按包导入，按文件路径加载。"""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "mcp-servers/weather/providers.py"
+    spec = importlib.util.spec_from_file_location("kangban_weather_providers", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _iploc_handler(city: str, lat: float, lon: float, *, loc_ok: bool = True):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith("http://ip-api.com/json/"):
+            if not loc_ok:
+                return httpx.Response(200, json={"status": "fail"})
+            return httpx.Response(
+                200, json={"status": "success", "city": city, "lat": lat, "lon": lon}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "current": {"weather_code": 1, "temperature_2m": 22.0},
+                "daily": {"temperature_2m_max": [26.0], "temperature_2m_min": [19.0]},
+            },
+        )
+
+    return handler
+
+
+async def test_weather_auto_locates_by_ip_when_no_city(monkeypatch):
+    import httpx
+
+    monkeypatch.delenv("MCP_WEATHER_DEFAULT_CITY", raising=False)
+    monkeypatch.delenv("MCP_WEATHER_PROVIDER", raising=False)
+    mod = _load_providers()
+    mod._reset_cache()
+
+    text = await mod.get_weather_report(
+        "", transport=httpx.MockTransport(_iploc_handler("杭州", 30.25, 120.17))
+    )
+
+    assert "杭州" in text
+    assert "示例数据" not in text
+
+
+async def test_weather_iploc_failure_asks_city_instead_of_guessing(monkeypatch):
+    """定位不可用 → 可见降级反问城市，绝不编造。"""
+    import httpx
+
+    monkeypatch.delenv("MCP_WEATHER_DEFAULT_CITY", raising=False)
+    monkeypatch.delenv("MCP_WEATHER_PROVIDER", raising=False)
+    mod = _load_providers()
+    mod._reset_cache()
+
+    text = await mod.get_weather_report(
+        "", transport=httpx.MockTransport(_iploc_handler("杭州", 30.25, 120.17, loc_ok=False))
+    )
+
+    assert text == mod._CITY_MISSING

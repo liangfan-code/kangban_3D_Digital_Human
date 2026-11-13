@@ -44,7 +44,8 @@ from app.services.authorization import AccessDecision, can_access_elder
 
 logger = get_logger(__name__)
 
-DEFAULT_RETRY_LIMIT = 3
+# 2026-11-13 用户拍板：拒药重问一次，二次拒绝即建漏服工单（原 3）
+DEFAULT_RETRY_LIMIT = 2
 FAMILY_PAGE_SIZE_MAX = 100
 TERMINAL_STATUSES = (
     MedicationOrderStatus.CONFIRMED,

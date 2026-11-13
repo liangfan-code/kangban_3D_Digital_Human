@@ -77,7 +77,8 @@ async def _workorder_count(db_session, order_id) -> int:
     ).scalar_one()
 
 
-async def test_three_denials_escalate_once(db_session, seed, tmp_path):
+async def test_two_denials_escalate_once(db_session, seed, tmp_path):
+    """2026-11-13 用户拍板：重问一次，二次拒绝即建漏服工单（原为 3 次）。"""
     plan = await _make_plan(db_session, seed["elders"]["d1"].elder_id)
     order = await _make_order(db_session, plan)
     factory = _session_factory(db_session)
@@ -98,17 +99,15 @@ async def test_three_denials_escalate_once(db_session, seed, tmp_path):
     assert order.status == MedicationOrderStatus.CALLING
     assert order.attempt_count == 2
 
-    await submit_reply(order.order_id, "还没吃", session_factory=factory,
-                       checkpoint_path=checkpoint)
     final = await submit_reply(order.order_id, "还没吃", session_factory=factory,
                                checkpoint_path=checkpoint)
 
     assert final.status == "escalated"
     assert order.status == MedicationOrderStatus.MISSED
-    assert order.attempt_count == 3
+    assert order.attempt_count == 2
     types = await _event_types(db_session, order.order_id)
-    assert types.count("reminded") == 3
-    assert types.count("denied") == 3
+    assert types.count("reminded") == 2
+    assert types.count("denied") == 2
     assert types.count("missed") == 1
     assert await _workorder_count(db_session, order.order_id) == 1
 
@@ -151,6 +150,48 @@ async def test_reply_without_start_confirms_and_records(db_session, seed, tmp_pa
     assert result.status == "confirmed"
     assert order.status == MedicationOrderStatus.CONFIRMED
     assert (await _event_types(db_session, order.order_id)).count("confirmed") == 1
+
+
+# ---------------- 拒药判定（「我不吃」绝不能判成已吃） ----------------
+
+
+def test_detect_medication_reply_refusals_are_denied():
+    from app.router.signals import detect_medication_reply
+
+    # 截图事故原句：「难吃了」曾被确认正则误判为已吃
+    assert detect_medication_reply("这个药太难吃了，我不吃。") == "denied"
+    assert detect_medication_reply("我不想吃药") == "denied"
+    assert detect_medication_reply("我吃不下，咽不下") == "denied"
+    assert detect_medication_reply("别让我吃这个药") == "denied"
+    # 不回归：确认/否认/延后原语义保持
+    assert detect_medication_reply("我吃过了") == "confirmed"
+    assert detect_medication_reply("已经吃了药") == "confirmed"
+    assert detect_medication_reply("还没吃") == "denied"
+    assert detect_medication_reply("等会儿再吃") == "deferred"
+
+
+async def test_refusal_reasks_once_then_missed_workorder(db_session, seed, tmp_path):
+    """用户拍板：拒药重问一次，二次拒绝即建漏服工单。"""
+    plan = await _make_plan(db_session, seed["elders"]["d1"].elder_id)
+    order = await _make_order(db_session, plan)
+    factory = _session_factory(db_session)
+    checkpoint = tmp_path / "refusal.sqlite3"
+
+    await start_confirmation(order.order_id, session_factory=factory, checkpoint_path=checkpoint)
+    first = await submit_reply(order.order_id, "这个药太难吃了，我不吃。",
+                               session_factory=factory, checkpoint_path=checkpoint)
+    # 第一次拒绝：绝不判成已吃，重问一次
+    assert first.status == "waiting_confirm"
+    assert order.status == MedicationOrderStatus.CALLING
+
+    final = await submit_reply(order.order_id, "我就是不想吃。",
+                               session_factory=factory, checkpoint_path=checkpoint)
+    assert final.status == "escalated"
+    assert order.status == MedicationOrderStatus.MISSED
+    types = await _event_types(db_session, order.order_id)
+    assert types.count("denied") == 2
+    assert types.count("missed") == 1
+    assert await _workorder_count(db_session, order.order_id) == 1
 
 
 async def test_state_recovers_after_new_graph_instance(db_session, seed, tmp_path):

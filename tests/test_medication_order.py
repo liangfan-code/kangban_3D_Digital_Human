@@ -105,24 +105,25 @@ async def test_ensure_order_idempotent_and_events_append_only(db_session, seed):
 
 
 async def test_retry_exhausted_creates_single_missed_workorder(db_session, seed):
+    """2026-11-13 用户拍板：重试上限 3→2，二次拒绝/超时即判漏服建单。"""
     doctor, plan, standing = await _setup(db_session, seed)
     order, _ = await order_service.ensure_order(
         db_session, plan=plan, scheduled_at=SCHEDULED_AT, created_source="scheduler"
     )
 
     await order_service.mark_reminded(db_session, order=order, source="scheduler")
-    await order_service.mark_reminded(db_session, order=order, source="scheduler")
     await order_service.mark_denied_or_timeout(
         db_session, order=order, kind="denied", source="scheduler"
     )
     assert order.status == MedicationOrderStatus.PENDING
-    assert order.attempt_count == 2
+    assert order.attempt_count == 1
 
     await order_service.mark_reminded(db_session, order=order, source="scheduler")
     await order_service.mark_denied_or_timeout(
         db_session, order=order, kind="denied", source="scheduler"
     )
     assert order.status == MedicationOrderStatus.MISSED
+    assert order.attempt_count == 2
 
     workorders = await _missed_workorders(db_session, order.order_id)
     assert len(workorders) == 1

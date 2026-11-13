@@ -16,14 +16,27 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.db.session import get_session_factory
 from app.integrations.embeddings import EmbeddingProvider, get_embedding_provider
 from app.integrations.llm import LlmUnavailable, complete_chat
-from app.models.enums import MemoryCategory, MemoryStatus, MemoryVisibility
+from app.models import (
+    BuildingAssignment,
+    DoctorElderAssignment,
+    Elder,
+    FamilyElderLink,
+    Room,
+)
+from app.models.enums import (
+    AccountRole,
+    AssignmentStatus,
+    MemoryCategory,
+    MemoryStatus,
+    MemoryVisibility,
+)
 from app.models.memory import MemoryChunk
 
 logger = get_logger(__name__)
@@ -618,11 +631,158 @@ async def weekly_maintenance(*, dry_run: bool = False) -> dict[str, Any]:
     return stats
 
 
+# ---- 只读查询（对话历史可视化 段 3）----
+
+
+class MemoryElderNotFound(Exception):
+    """长者不存在（上层映射 404，不暴露存在性）。"""
+
+
+class MemoryAccessDenied(Exception):
+    """当前账号无权查看该长者的记忆（上层映射 403）。"""
+
+
+async def _assert_elder_visible(
+    db: AsyncSession, *, account_id: UUID, role: str, elder_id: UUID
+) -> None:
+    """记忆读权限校验：admin 全量；doctor 限绑定；nurse 限楼栋；family 限有效绑定。
+
+    家属未绑定按长者不存在处理（404），不暴露存在性；医生/护士越权映射 403。
+    """
+    elder = await db.get(Elder, elder_id)
+    if elder is None:
+        raise MemoryElderNotFound("长者不存在")
+
+    if role == AccountRole.ADMIN:
+        return
+
+    if role == AccountRole.DOCTOR:
+        stmt = select(DoctorElderAssignment.assignment_id).where(
+            DoctorElderAssignment.account_id == account_id,
+            DoctorElderAssignment.elder_id == elder_id,
+            DoctorElderAssignment.status == AssignmentStatus.ACTIVE,
+            or_(
+                DoctorElderAssignment.valid_until.is_(None),
+                DoctorElderAssignment.valid_until > func.now(),
+            ),
+        )
+        if (await db.execute(stmt)).scalar_one_or_none() is None:
+            raise MemoryAccessDenied("elder_not_visible")
+        return
+
+    if role == AccountRole.NURSE:
+        buildings = select(BuildingAssignment.building_code).where(
+            BuildingAssignment.account_id == account_id,
+            BuildingAssignment.status == AssignmentStatus.ACTIVE,
+        )
+        stmt = (
+            select(Elder.elder_id)
+            .join(Room, Room.room_id == Elder.room_id)
+            .where(Elder.elder_id == elder_id, Room.building_code.in_(buildings))
+        )
+        if (await db.execute(stmt)).scalar_one_or_none() is None:
+            raise MemoryAccessDenied("elder_not_visible")
+        return
+
+    if role == AccountRole.FAMILY:
+        stmt = select(FamilyElderLink.assignment_id).where(
+            FamilyElderLink.account_id == account_id,
+            FamilyElderLink.elder_id == elder_id,
+            FamilyElderLink.status == AssignmentStatus.ACTIVE,
+            or_(
+                FamilyElderLink.valid_until.is_(None),
+                FamilyElderLink.valid_until > func.now(),
+            ),
+        )
+        if (await db.execute(stmt)).scalar_one_or_none() is None:
+            raise MemoryElderNotFound("长者不存在")
+        return
+
+    raise MemoryAccessDenied("elder_not_visible")
+
+
+async def list_memory_chunks(
+    db: AsyncSession,
+    *,
+    account_id: UUID,
+    role: str,
+    elder_id: UUID,
+    visibility: str | None = None,
+    category: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    """只读分页查询长者长期记忆（不含 embedding 向量）。
+
+    默认只返回 status=active；家属可读绑定长者的全部 active 记忆。
+    返回 ``{"items", "total"}``，items 按创建时间倒序；
+    日志只记元数据，不记记忆正文。
+    """
+    elder_id = _require_elder(elder_id)
+    await _assert_elder_visible(db, account_id=account_id, role=role, elder_id=elder_id)
+
+    conditions = [
+        MemoryChunk.elder_id == elder_id,
+        MemoryChunk.status == MemoryStatus.ACTIVE,
+    ]
+    if visibility is not None:
+        conditions.append(MemoryChunk.visibility == visibility)
+    if category is not None:
+        conditions.append(MemoryChunk.category == category)
+
+    total = (
+        await db.execute(select(func.count()).select_from(MemoryChunk).where(*conditions))
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            select(
+                MemoryChunk.chunk_id,
+                MemoryChunk.content,
+                MemoryChunk.category,
+                MemoryChunk.visibility,
+                MemoryChunk.created_at,
+            )
+            .where(*conditions)
+            .order_by(MemoryChunk.created_at.desc(), MemoryChunk.chunk_id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+
+    logger.info(
+        "记忆列表查询",
+        extra={
+            "event": "memory_list",
+            "elder_id": str(elder_id),
+            "role": role,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+    return {
+        "items": [
+            {
+                "chunk_id": str(row.chunk_id),
+                "content": row.content,
+                "category": row.category,
+                "visibility": row.visibility,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ],
+        "total": total,
+    }
+
+
 __all__ = [
+    "MemoryAccessDenied",
+    "MemoryElderNotFound",
     "build_memory_context",
     "build_recall_context",
     "extract_and_remember",
     "extract_memories",
+    "list_memory_chunks",
     "maintenance",
     "recall",
     "remember",

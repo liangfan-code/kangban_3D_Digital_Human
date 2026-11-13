@@ -263,6 +263,14 @@ def looks_medication_query(text: str) -> bool:
 # 服药回复（Day7 段3）：确认 / 否认 / 延后三分流。
 # 「我不吃药」是拒绝用药，由 router/service 的 _NEGATED_MEDICATION_RE 先拦截，
 # 不进入这里的词表；疑问句（吃了吗/吃药了吗）用负向前瞻排除。
+# 拒药词表（2026-11-13 事故修复）：「这个药太难吃了，我不吃」曾被确认正则
+# 误判为已吃（「难吃了」命中 吃了）——拒药必须先于确认判定，宁拒勿假确认。
+_MEDICATION_REFUSED_RE = re.compile(
+    r"不(?:想|要|用|肯|能|打算)(?:再)?(?:吃|服)"
+    r"|不(?:吃|服)(?:药|了|它|这)?"
+    r"|别(?:让(?:我|我们))?(?:再)?(?:吃|服)"
+    r"|难吃|吃不下|咽不下|服不下|吃不消"
+)
 _MEDICATION_DEFERRED_RE = re.compile(
     r"(?:等|过|待)(?:一)?会[儿]?(?:再)?吃|待会儿吃|晚点(?:儿)?吃|一会(?:儿)?(?:再)?吃"
 )
@@ -270,7 +278,7 @@ _MEDICATION_DENIED_RE = re.compile(
     r"(?:还|都|又|今天|现在)?没(?:有)?(?:吃|服)(?:药)?|药(?:还|都|又)?没(?:吃|服)"
 )
 _MEDICATION_CONFIRMED_RE = re.compile(
-    r"(?:已经|刚|刚才)?(?<!快)(?<!要)(?<!片)吃(?:过|完|了)(?:药)?(?!吗|么|饭|菜|没)"
+    r"(?:已经|刚|刚才)?(?<!快)(?<!要)(?<!片)(?<!难)吃(?:过|完|了)(?:药)?(?!吗|么|饭|菜|没)"
     r"|服(?:过|完|了)药"
     r"|药(?:已经|已|刚)?吃(?:了|过|完)(?!吗|么|没)"
 )
@@ -283,11 +291,14 @@ _MEDICATION_QUESTION_RE = re.compile(
 def detect_medication_reply(text: str) -> str | None:
     """把服药回复分成 confirmed / denied / deferred；不是服药回复返回 None。
 
-    顺序固定为延后 → 否认 → 确认：「等会儿吃」不是否认，「还没吃」不是确认。
+    顺序固定为疑问 → 拒药 → 延后 → 否认 → 确认：「等会儿吃」不是否认，
+    「还没吃」不是确认，「太难吃了/我不吃」绝不能落进确认。
     """
     normalized = text or ""
     if _MEDICATION_QUESTION_RE.search(normalized):
         return None
+    if _MEDICATION_REFUSED_RE.search(normalized):
+        return "denied"
     if _MEDICATION_DEFERRED_RE.search(normalized):
         return "deferred"
     if _MEDICATION_DENIED_RE.search(normalized):

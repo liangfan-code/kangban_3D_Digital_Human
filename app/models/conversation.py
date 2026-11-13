@@ -64,7 +64,14 @@ class Conversation(Base):
         default=ConversationStatus.ACTIVE,
         server_default=ConversationStatus.ACTIVE,
     )
+    # 长期记忆萃取游标（已萃取到 conversation_messages.seq）：DB 为准，Redis 仅会话内缓存。
+    # 落库的原因：Redis TTL 24h 过期后旧会话会从 0 重扫、重复萃取。
+    memory_upto_seq: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 保留期到期时间（数据治理 段4）：NULL = 永不清理；到期后归档→删除
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

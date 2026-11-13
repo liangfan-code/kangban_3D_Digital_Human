@@ -104,13 +104,18 @@ async def test_geocode_empty_result_asks_bigger_city():
     assert calls == ["geocoding-api.open-meteo.com"]
 
 
-async def test_local_city_without_default_asks_city_name():
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("不应发起网络请求")
+async def test_local_city_iploc_failure_asks_city_name():
+    """未指名城市先试 IP 自动定位；定位不可用才反问，且不再请求天气接口。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"status": "fail"})
 
     text = await providers.get_weather_report("本地", transport=httpx.MockTransport(handler))
 
     assert text == "您想查哪个城市的天气？告诉我城市名就好。"
+    assert len(calls) == 1 and calls[0].startswith("http://ip-api.com/json/")
 
 
 async def test_local_city_uses_configured_default(monkeypatch):

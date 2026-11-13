@@ -501,6 +501,22 @@ async def _weekly_memory_job() -> None:
         )
 
 
+async def _conversation_retention_job() -> None:
+    """段4：每日 03:30 会话治理（归档到期会话 + 审计）；异常只记日志。"""
+    try:
+        from app.services.conversation_retention import run_scheduled_maintenance
+
+        await run_scheduled_maintenance()
+    except Exception as exc:  # noqa: BLE001 —— job 级兜底
+        logger.error(
+            "会话治理 job 异常",
+            extra={
+                "event": "conversation_retention_job_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
+
 async def run_startup_backfill(
     *, now: datetime | None = None, session_factory: Callable[[], Any] | None = None
 ) -> dict[str, int] | None:
@@ -563,6 +579,15 @@ async def start_medication_scheduler(settings: Settings | None = None) -> Any | 
             day_of_week="sun", hour=3, minute=0, timezone=settings.app_timezone
         ),
         id="memory_maintenance_weekly",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 段4：会话数据治理日任务（retention_days=0 时仅清理 expires_at 已到期的会话）
+    scheduler.add_job(
+        _conversation_retention_job,
+        trigger=CronTrigger(hour=3, minute=30, timezone=settings.app_timezone),
+        id="conversation_retention_daily",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

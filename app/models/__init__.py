@@ -5,7 +5,10 @@ from app.models.account import Account
 from app.models.assignment import BuildingAssignment, DoctorElderAssignment, FamilyElderLink
 from app.models.base import Base
 from app.models.conversation import Conversation
+from app.models.conversation_archive import ConversationArchive
+from app.models.conversation_audit_log import ConversationAuditLog
 from app.models.conversation_message import ConversationMessage
+from app.models.conversation_write_failure import ConversationWriteFailure
 from app.models.device_token import DeviceToken
 from app.models.elder import Elder
 from app.models.facility import Device, Room
@@ -32,6 +35,9 @@ __all__ = [
     "BuildingAssignment",
     "Conversation",
     "ConversationMessage",
+    "ConversationArchive",
+    "ConversationAuditLog",
+    "ConversationWriteFailure",
     "Device",
     "DeviceToken",
     "DoctorElderAssignment",
